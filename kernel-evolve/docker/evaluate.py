@@ -18,8 +18,14 @@ def decode_request(b64_payload: str) -> dict[str, Any]:
 def _has_tpu() -> bool:
   try:
     import jax
-    return any(d.platform == "tpu" for d in jax.devices())
-  except Exception:
+    devices = jax.devices()
+    print(f"JAX devices: {devices}", file=sys.stderr)
+    has = any(d.platform == "tpu" for d in devices)
+    if not has:
+      print(f"JAX default backend: {jax.default_backend()}", file=sys.stderr)
+    return has
+  except Exception as e:
+    print(f"TPU detection error: {e}", file=sys.stderr)
     return False
 
 
