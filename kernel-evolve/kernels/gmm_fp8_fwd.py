@@ -101,9 +101,13 @@ def _make_group_metadata(
     group_ids = []
     m_tile_ids = []
     for g in range(num_groups):
-        tiles_for_g = int(np.ceil(group_sizes[g] / tm))
-        group_ids.extend([g] * tiles_for_g)
-        m_tile_ids.extend(range(tiles_for_g))
+        start_row = group_offsets[g]
+        end_row = group_offsets[g + 1]
+        start_tile = start_row // tm
+        end_tile = int(np.ceil(end_row / tm)) if end_row > start_row else start_tile
+        for t in range(start_tile, end_tile):
+            group_ids.append(g)
+            m_tile_ids.append(t)  # global tile index
 
     return (
         jnp.array(group_offsets, dtype=jnp.int32),
@@ -169,36 +173,30 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
 
     def lhs_qv_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del n_i
-        g_id = group_metadata_ref[0, tile_i]
-        m_tid = group_metadata_ref[1, tile_i]
-        m_start = group_offsets_ref[g_id] + m_tid * tm
-        return (m_start, k_i * tk)
+        m_tid = group_metadata_ref[1, tile_i]  # global tile index
+        return (m_tid, k_i)
 
     def lhs_sc_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del n_i
-        g_id = group_metadata_ref[0, tile_i]
-        m_tid = group_metadata_ref[1, tile_i]
-        m_start = group_offsets_ref[g_id] + m_tid * tm
-        # Scale shape [M, K//128]; tile (tm, 1) since tk/128 = 1
-        return (m_start, k_i)
+        m_tid = group_metadata_ref[1, tile_i]  # global tile index
+        # Scale shape [M, K//128]; block (tm, 1) since tk/128 = 1
+        return (m_tid, k_i)
 
     def rhs_qv_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del group_offsets_ref
         g_id = group_metadata_ref[0, tile_i]
-        return (g_id, k_i * tk, n_i * tn)
+        return (g_id, k_i, n_i)
 
     def rhs_sc_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del group_offsets_ref
         g_id = group_metadata_ref[0, tile_i]
-        # Scale shape [G, K//128, N//128]; tile (1, 1, 1)
+        # Scale shape [G, K//128, N//128]; block (1, 1, 1)
         return (g_id, k_i, n_i)
 
     def out_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del k_i
-        g_id = group_metadata_ref[0, tile_i]
-        m_tid = group_metadata_ref[1, tile_i]
-        m_start = group_offsets_ref[g_id] + m_tid * tm
-        return (m_start, n_i * tn)
+        m_tid = group_metadata_ref[1, tile_i]  # global tile index
+        return (m_tid, n_i)
 
     # -- 5. BlockSpecs -----------------------------------------------------
     lhs_qv_spec = pl.BlockSpec((tm, tk), lhs_qv_index_map)
@@ -252,15 +250,17 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
         def _store():
             # Mask: rows beyond the group boundary should not be overwritten.
             g_id = group_metadata_ref[0, grid_id]
-            m_tid = group_metadata_ref[1, grid_id]
+            m_tid = group_metadata_ref[1, grid_id]  # global tile index
             g_start = group_offsets_ref[g_id]
             g_end = group_offsets_ref[g_id + 1]
-            tile_row_start = g_start + m_tid * tm
+            tile_row_start = m_tid * tm
 
-            # Number of valid rows in this tile.
-            valid_rows = g_end - tile_row_start
+            # Number of valid rows in this tile for the current group.
+            valid_start = jnp.maximum(g_start - tile_row_start, 0)
+            valid_end = jnp.minimum(g_end - tile_row_start, tm)
             row_ids = jnp.arange(tm, dtype=jnp.int32)
-            mask = row_ids[:, None] < valid_rows
+            mask = (row_ids >= valid_start) & (row_ids < valid_end)
+            mask = mask[:, None]  # broadcast over N
 
             acc = acc_scratch[...]
             existing = out_ref[...].astype(jnp.float32)
@@ -290,9 +290,6 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
             dimension_semantics=("parallel", "arbitrary", "arbitrary"),
         ),
     )
-
-    # Initialise output to zeros so masked regions are well-defined.
-    out_init = jnp.zeros((M, N), dtype=jnp.bfloat16)
 
     result = kernel(group_metadata, group_offsets, lhs_qv, lhs_sc, rhs_qv, rhs_sc)
     return result

@@ -185,32 +185,20 @@ def _tgmm_kernel(
         lhs_tile = jnp.where(mask_lhs, lhs_tile, 0.0)
         rhs_tile = jnp.where(mask_rhs, rhs_tile, 0.0)
 
-        # Transposed dot: [tm, tk]^T @ [tm, tn] = [tk, tn]
-        out = jnp.dot(lhs_tile.T, rhs_tile)  # [tk, tn] in f32
-
-        # Apply block-wise scales
-        # lhs_scale_ref: [tm, tk // 128] -> after transpose: [tk // 128, tm]
-        # rhs_scale_ref: [tm, tn // 128]
+        # Apply block-wise scales before dot (required for per-element scaling).
+        # lhs_scale_ref: [tm, tk // 128], rhs_scale_ref: [tm, tn // 128]
         lhs_s = lhs_scale_ref[...].astype(jnp.float32)   # [tm, tk // 128]
         rhs_s = rhs_scale_ref[...].astype(jnp.float32)   # [tm, tn // 128]
 
-        # Expand scales to match tile dimensions.
-        # lhs_s [tm, tk//128] -> broadcast each scale block across 128 cols -> [tm, tk]
+        # Expand scales to match tile dimensions
         lhs_s_exp = jnp.repeat(lhs_s, BLOCK_SIZE, axis=1)  # [tm, tk]
         rhs_s_exp = jnp.repeat(rhs_s, BLOCK_SIZE, axis=1)  # [tm, tn]
 
-        # Mask scales too
-        lhs_s_exp = jnp.where(mask_lhs, lhs_s_exp, 0.0)
-        rhs_s_exp = jnp.where(mask_rhs, rhs_s_exp, 0.0)
+        lhs_scaled = lhs_tile * lhs_s_exp   # [tm, tk] dequantized
+        rhs_scaled = rhs_tile * rhs_s_exp   # [tm, tn] dequantized
 
-        # Scale the result: we need to apply per-element scaling.
-        # For exact scaling: sum_m (lhs[m,k] * lhs_scale[m,k_block]) * (rhs[m,n] * rhs_scale[m,n_block])
-        # = sum_m (lhs_scaled[m,k] * rhs_scaled[m,n])
-        # So we scale before the dot product.
-        lhs_scaled = lhs_tile * lhs_s_exp   # [tm, tk]
-        rhs_scaled = rhs_tile * rhs_s_exp   # [tm, tn]
-
-        out = jnp.dot(lhs_scaled.T, rhs_scaled)  # [tk, tn]
+        # Transposed dot: [tm, tk]^T @ [tm, tn] = [tk, tn]
+        out = jnp.dot(lhs_scaled.T, rhs_scaled)  # [tk, tn] in f32
 
         acc_scratch[...] += out
 
