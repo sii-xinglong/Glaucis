@@ -13,12 +13,12 @@ def matmul_kernel(x_ref, y_ref, o_ref):
 
 
 def optimized_compute(M=1024, N=1024, K=1024):
-  x = jax.random.normal(jax.random.PRNGKey(0), (M, K), dtype=jnp.float16)
-  y = jax.random.normal(jax.random.PRNGKey(1), (K, N), dtype=jnp.float16)
+  x = jax.random.normal(jax.random.PRNGKey(0), (M, K), dtype=jnp.bfloat16)
+  y = jax.random.normal(jax.random.PRNGKey(1), (K, N), dtype=jnp.bfloat16)
   BLOCK_M, BLOCK_N = 128, 128
   result = pl.pallas_call(
     matmul_kernel,
-    out_shape=jax.ShapeDtypeStruct((M, N), jnp.float16),
+    out_shape=jax.ShapeDtypeStruct((M, N), jnp.bfloat16),
     grid=(M // BLOCK_M, N // BLOCK_N),
     in_specs=[
       pl.BlockSpec((BLOCK_M, K), lambda i, j: (i, 0)),
