@@ -26,8 +26,13 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
       - name: Install dependencies
-        run: python3 -m pip install --no-cache-dir jax[tpu] numpy -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+        run: pip install --no-cache-dir jax[tpu] numpy -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
       - name: Run evaluation
-        run: python3 kernel-evolve/docker/evaluate.py --eval-payload "${{ inputs.eval_payload }}"
+        run: python kernel-evolve/docker/evaluate.py --eval-payload "${{ inputs.eval_payload }}"
