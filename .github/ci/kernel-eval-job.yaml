@@ -34,8 +34,7 @@ spec:
           env | grep -i tpu || echo "No TPU env vars"
           apt-get update && apt-get install -y libnuma1 2>/dev/null || true
           pip install --no-cache-dir jax[tpu] numpy
-          pip uninstall -y libtpu 2>/dev/null || true
-          pip install --no-cache-dir libtpu-nightly -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+          pip install --no-cache-dir --pre --force-reinstall libtpu -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
           git clone --depth=1 --branch="$BRANCH" \
             "https://github.com/$REPO.git" /workspace 2>/dev/null || \
           (git clone "https://github.com/$REPO.git" /workspace && \
