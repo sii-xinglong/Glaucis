@@ -1,0 +1,57 @@
+# Kernel Evaluation K8s Job Template
+# Rendered by envsubst with: $JOB_NAME $BRANCH $REPO $VARIANT_ID
+# TPU resources are requested to schedule on TPU nodes
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: default
+  labels:
+    app: kernel-eval
+    variant-id: "${VARIANT_ID}"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: kernel-eval
+        job-name: ${JOB_NAME}
+    spec:
+      containers:
+      - name: kernel-eval
+        image: us-central1-docker.pkg.dev/tpu-service-473302/glaucis/kernel-eval:latest
+        command:
+        - bash
+        - -c
+        - |
+          set -ex
+          git clone --depth=1 --branch="$BRANCH" \
+            "https://github.com/$REPO.git" /workspace 2>/dev/null || \
+          (git clone "https://github.com/$REPO.git" /workspace && \
+           cd /workspace && git checkout "$BRANCH")
+          cd /workspace
+          python kernel-evolve/docker/evaluate.py --eval-payload "$EVAL_PAYLOAD"
+        env:
+        - name: BRANCH
+          value: "${BRANCH}"
+        - name: REPO
+          value: "${REPO}"
+        - name: EVAL_PAYLOAD
+          valueFrom:
+            configMapKeyRef:
+              name: ${JOB_NAME}-payload
+              key: payload
+        resources:
+          limits:
+            google.com/tpu: "4"
+          requests:
+            google.com/tpu: "4"
+        securityContext:
+          privileged: true
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu-v4-podslice
+        cloud.google.com/gke-tpu-topology: 2x2x1
+      restartPolicy: Never
