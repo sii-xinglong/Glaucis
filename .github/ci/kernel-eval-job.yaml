@@ -22,12 +22,13 @@ spec:
     spec:
       containers:
       - name: kernel-eval
-        image: us-central1-docker.pkg.dev/tpu-service-473302/glaucis/kernel-eval:latest
+        image: python:3.10
         command:
         - bash
         - -c
         - |
           set -ex
+          pip install --no-cache-dir jax[tpu] numpy
           git clone --depth=1 --branch="$BRANCH" \
             "https://github.com/$REPO.git" /workspace 2>/dev/null || \
           (git clone "https://github.com/$REPO.git" /workspace && \
