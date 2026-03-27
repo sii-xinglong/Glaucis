@@ -10,8 +10,8 @@ def matmul_kernel(x_ref, y_ref, o_ref):
   BLOCK_K = 128
   acc = jnp.zeros(o_ref.shape, dtype=jnp.float32)
   def body(i, acc):
-    x = pl.load(x_ref, (pl.dslice(None), pl.dslice(i * BLOCK_K, BLOCK_K)))
-    y = pl.load(y_ref, (pl.dslice(i * BLOCK_K, BLOCK_K), pl.dslice(None)))
+    x = x_ref[:, pl.ds(i * BLOCK_K, BLOCK_K)]
+    y = y_ref[pl.ds(i * BLOCK_K, BLOCK_K), :]
     acc += jnp.dot(x, y)
     return acc
   k_tiles = x_ref.shape[1] // BLOCK_K
