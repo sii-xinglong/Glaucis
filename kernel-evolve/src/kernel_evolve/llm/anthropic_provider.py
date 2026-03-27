@@ -25,7 +25,8 @@ Rules:
 
 Output format:
 1. The mutated kernel code in a ```python``` block
-2. A JSON object with suggested behavioral descriptors: {"block_size": N, "pipeline_stages": N, "memory_strategy": "scratch|hbm|rmw"}
+2. A JSON object with suggested behavioral descriptors:
+   {"block_size": N, "pipeline_stages": N, "memory_strategy": "scratch|hbm|rmw"}
 3. A one-line explanation of the change
 """
 
@@ -77,7 +78,8 @@ class AnthropicProvider(LLMProvider):
         pass
 
     explanation_lines = [
-      line for line in text.split("\n")
+      line
+      for line in text.split("\n")
       if line.strip() and not line.strip().startswith("```") and not line.strip().startswith("{")
     ]
     explanation = explanation_lines[-1] if explanation_lines else ""

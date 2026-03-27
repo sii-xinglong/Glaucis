@@ -1,11 +1,10 @@
 """Tests for CI-based evaluation dispatcher."""
 
-import json
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
-from kernel_evolve.ci_dispatcher import CIDispatcher, CIConfig
+from kernel_evolve.ci_dispatcher import CIConfig, CIDispatcher
 from kernel_evolve.evaluator import EvalRequest, EvalResult, EvalStatus
 
 
@@ -33,9 +32,7 @@ async def test_dispatch_and_collect(ci_config):
 
   mock_trigger = AsyncMock(return_value="12345")
   mock_wait = AsyncMock(return_value="completed")
-  mock_collect = AsyncMock(
-    return_value=EvalResult.success(latency_ms=1.0, speedup=2.5, flops=1e12)
-  )
+  mock_collect = AsyncMock(return_value=EvalResult.success(latency_ms=1.0, speedup=2.5, flops=1e12))
 
   dispatcher._trigger_workflow = mock_trigger
   dispatcher._wait_for_completion = mock_wait

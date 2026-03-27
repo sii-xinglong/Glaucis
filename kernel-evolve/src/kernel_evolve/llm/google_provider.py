@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import re
 
-from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
 from kernel_evolve.llm.anthropic_provider import MUTATION_SYSTEM_PROMPT
+from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
 
 try:
   from google import genai
   from google.genai.types import GenerateContentConfig
 except ImportError:
   import types
+
   genai = types.ModuleType("genai")
   genai.Client = None
   GenerateContentConfig = None
@@ -69,7 +70,8 @@ class GoogleProvider(LLMProvider):
         pass
 
     explanation_lines = [
-      line for line in text.split("\n")
+      line
+      for line in text.split("\n")
       if line.strip() and not line.strip().startswith("```") and not line.strip().startswith("{")
     ]
     explanation = explanation_lines[-1] if explanation_lines else ""

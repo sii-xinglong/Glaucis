@@ -6,7 +6,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 
-from kernel_evolve.evaluator import Evaluator, EvalRequest, EvalResult, EvalStatus
+from kernel_evolve.evaluator import EvalRequest, EvalResult, Evaluator
 
 
 @dataclass
@@ -40,25 +40,36 @@ class CIDispatcher(Evaluator):
   async def _trigger_workflow(self, request: EvalRequest) -> str:
     payload = request.encode_b64()
     cmd = [
-      "gh", "workflow", "run", self._config.workflow,
-      "--repo", self._config.repo,
-      "--ref", self._config.branch,
-      "-f", f"eval_payload={payload}",
-      "-f", f"variant_id={request.variant_id}",
+      "gh",
+      "workflow",
+      "run",
+      self._config.workflow,
+      "--repo",
+      self._config.repo,
+      "--ref",
+      self._config.branch,
+      "-f",
+      f"eval_payload={payload}",
+      "-f",
+      f"variant_id={request.variant_id}",
     ]
-    proc = await asyncio.create_subprocess_exec(
-      *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
       raise RuntimeError(f"gh workflow run failed: {stderr.decode()}")
 
     list_cmd = [
-      "gh", "run", "list",
-      "--repo", self._config.repo,
-      "--workflow", self._config.workflow,
-      "--limit", "1",
-      "--json", "databaseId",
+      "gh",
+      "run",
+      "list",
+      "--repo",
+      self._config.repo,
+      "--workflow",
+      self._config.workflow,
+      "--limit",
+      "1",
+      "--json",
+      "databaseId",
     ]
     proc = await asyncio.create_subprocess_exec(
       *list_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -71,13 +82,16 @@ class CIDispatcher(Evaluator):
     elapsed = 0
     while elapsed < self._config.timeout:
       cmd = [
-        "gh", "run", "view", run_id,
-        "--repo", self._config.repo,
-        "--json", "status,conclusion",
+        "gh",
+        "run",
+        "view",
+        run_id,
+        "--repo",
+        self._config.repo,
+        "--json",
+        "status,conclusion",
       ]
-      proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-      )
+      proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
       stdout, _ = await proc.communicate()
       data = json.loads(stdout.decode())
       if data["status"] == "completed":
@@ -88,13 +102,15 @@ class CIDispatcher(Evaluator):
 
   async def _collect_result(self, run_id: str) -> EvalResult:
     cmd = [
-      "gh", "run", "view", run_id,
-      "--repo", self._config.repo,
+      "gh",
+      "run",
+      "view",
+      run_id,
+      "--repo",
+      self._config.repo,
       "--log",
     ]
-    proc = await asyncio.create_subprocess_exec(
-      *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, _ = await proc.communicate()
     log_text = stdout.decode()
 

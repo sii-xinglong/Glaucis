@@ -1,10 +1,8 @@
 """Tests for MAP-Elites population manager."""
 
-import json
-
 import pytest
 
-from kernel_evolve.population import Archive, Variant, BehaviorDescriptor
+from kernel_evolve.population import Archive, BehaviorDescriptor, Variant
 
 
 @pytest.fixture

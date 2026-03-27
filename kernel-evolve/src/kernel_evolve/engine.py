@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
 
 from kernel_evolve.config import EvolveConfig
-from kernel_evolve.evaluator import Evaluator, EvalRequest, EvalResult, EvalStatus
+from kernel_evolve.evaluator import EvalRequest, EvalResult, EvalStatus, Evaluator
 from kernel_evolve.llm.base import LLMProvider, MutationRequest
 from kernel_evolve.mutation import extract_evolve_block, inject_evolve_block, validate_syntax
 from kernel_evolve.perf_log import PerfLog
@@ -111,10 +110,7 @@ class EvolutionEngine:
     if self._stagnation_count >= self._config.evolution.stagnation_limit:
       self._handle_stagnation()
 
-    if (
-      len(self._islands) > 1
-      and self._generation % self._config.evolution.migration_interval == 0
-    ):
+    if len(self._islands) > 1 and self._generation % self._config.evolution.migration_interval == 0:
       self._migrate()
 
     for i, island in enumerate(self._islands):

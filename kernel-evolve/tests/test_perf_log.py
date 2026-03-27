@@ -2,8 +2,8 @@
 
 import pytest
 
+from kernel_evolve.evaluator import EvalResult
 from kernel_evolve.perf_log import PerfLog
-from kernel_evolve.evaluator import EvalResult, EvalStatus
 from kernel_evolve.population import BehaviorDescriptor
 
 
@@ -48,20 +48,24 @@ def test_log_generation(perf_log):
 def test_cumulative_best_tracking(perf_log):
   perf_log.write_header()
 
-  entries1 = [{
-    "variant_id": "v001",
-    "descriptor": BehaviorDescriptor(),
-    "result": EvalResult.success(latency_ms=2.0, speedup=1.5, flops=1e12),
-    "explanation": "first",
-  }]
+  entries1 = [
+    {
+      "variant_id": "v001",
+      "descriptor": BehaviorDescriptor(),
+      "result": EvalResult.success(latency_ms=2.0, speedup=1.5, flops=1e12),
+      "explanation": "first",
+    }
+  ]
   perf_log.log_generation(1, entries1, "v001", 1.5)
 
-  entries2 = [{
-    "variant_id": "v002",
-    "descriptor": BehaviorDescriptor(block_size=256),
-    "result": EvalResult.success(latency_ms=1.0, speedup=3.0, flops=1e12),
-    "explanation": "better",
-  }]
+  entries2 = [
+    {
+      "variant_id": "v002",
+      "descriptor": BehaviorDescriptor(block_size=256),
+      "result": EvalResult.success(latency_ms=1.0, speedup=3.0, flops=1e12),
+      "explanation": "better",
+    }
+  ]
   perf_log.log_generation(2, entries2, "v002", 3.0)
 
   content = perf_log.path.read_text()

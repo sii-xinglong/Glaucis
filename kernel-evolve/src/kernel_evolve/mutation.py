@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 
-
 DEFAULT_START_MARKER = "# EVOLVE-BLOCK-START"
 DEFAULT_END_MARKER = "# EVOLVE-BLOCK-END"
 

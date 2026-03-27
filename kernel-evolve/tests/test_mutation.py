@@ -4,8 +4,7 @@ import pytest
 
 from kernel_evolve.mutation import extract_evolve_block, inject_evolve_block, validate_syntax
 
-
-TEMPLATE_CODE = '''\
+TEMPLATE_CODE = """\
 import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
@@ -19,7 +18,7 @@ def kernel(x_ref, y_ref, o_ref):
 
 def run():
   return pl.pallas_call(kernel, out_shape=jax.ShapeDtypeStruct((64,), jnp.float32))(x, y)
-'''
+"""
 
 
 def test_extract_evolve_block():

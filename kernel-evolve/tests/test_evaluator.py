@@ -1,12 +1,9 @@
 """Tests for the three-stage evaluator pipeline."""
 
-import pytest
-
 from kernel_evolve.evaluator import (
+  EvalRequest,
   EvalResult,
   EvalStatus,
-  Evaluator,
-  EvalRequest,
 )
 
 

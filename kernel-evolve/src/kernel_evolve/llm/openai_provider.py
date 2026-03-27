@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import re
 
-from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
 from kernel_evolve.llm.anthropic_provider import MUTATION_SYSTEM_PROMPT
+from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
 
 try:
   from openai import AsyncOpenAI
@@ -63,7 +63,8 @@ class OpenAIProvider(LLMProvider):
         pass
 
     explanation_lines = [
-      line for line in text.split("\n")
+      line
+      for line in text.split("\n")
       if line.strip() and not line.strip().startswith("```") and not line.strip().startswith("{")
     ]
     explanation = explanation_lines[-1] if explanation_lines else ""

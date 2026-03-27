@@ -1,14 +1,12 @@
 """Tests for the main evolution engine loop."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from kernel_evolve.config import EvolveConfig
 from kernel_evolve.engine import EvolutionEngine
-from kernel_evolve.evaluator import EvalResult, EvalStatus
-from kernel_evolve.population import Archive, Variant, BehaviorDescriptor
+from kernel_evolve.evaluator import EvalResult
 from kernel_evolve.llm.base import MutationResponse
 
 

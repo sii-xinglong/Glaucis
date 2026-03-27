@@ -1,11 +1,11 @@
 """Tests for LLM provider interface."""
 
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
 from kernel_evolve.llm.anthropic_provider import AnthropicProvider
+from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
 
 
 def test_mutation_request_format():
@@ -42,7 +42,12 @@ def test_provider_interface():
 async def test_anthropic_provider_mutate():
   mock_client = MagicMock()
   mock_message = MagicMock()
-  mock_message.content = [MagicMock(text='```python\ndef optimized(): pass\n```\n{"block_size": 128, "pipeline_stages": 2, "memory_strategy": "scratch"}\nExplanation: optimized loop')]
+  mock_text = (
+    "```python\ndef optimized(): pass\n```\n"
+    '{"block_size": 128, "pipeline_stages": 2, "memory_strategy": "scratch"}\n'
+    "Explanation: optimized loop"
+  )
+  mock_message.content = [MagicMock(text=mock_text)]
   mock_client.messages.create = AsyncMock(return_value=mock_message)
 
   with patch("kernel_evolve.llm.anthropic_provider.AsyncAnthropic", return_value=mock_client):

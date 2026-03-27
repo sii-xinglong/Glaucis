@@ -26,5 +26,4 @@ class MutationResponse:
 
 class LLMProvider(ABC):
   @abstractmethod
-  async def mutate(self, request: MutationRequest) -> MutationResponse:
-    ...
+  async def mutate(self, request: MutationRequest) -> MutationResponse: ...

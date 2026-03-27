@@ -1,6 +1,6 @@
 """Tests for Google and OpenAI LLM providers."""
 
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,7 +13,11 @@ from kernel_evolve.llm.openai_provider import OpenAIProvider
 async def test_google_provider_mutate():
   mock_client = MagicMock()
   mock_response = MagicMock()
-  mock_response.text = '```python\ndef optimized(): pass\n```\n{"block_size": 256, "pipeline_stages": 1, "memory_strategy": "hbm"}\nUsed larger blocks'
+  mock_response.text = (
+    "```python\ndef optimized(): pass\n```\n"
+    '{"block_size": 256, "pipeline_stages": 1, "memory_strategy": "hbm"}\n'
+    "Used larger blocks"
+  )
   mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
   with patch("kernel_evolve.llm.google_provider.genai.Client", return_value=mock_client):
@@ -28,7 +32,11 @@ async def test_openai_provider_mutate():
   mock_client = MagicMock()
   mock_response = MagicMock()
   mock_choice = MagicMock()
-  mock_choice.message.content = '```python\ndef optimized(): pass\n```\n{"block_size": 128, "pipeline_stages": 3, "memory_strategy": "scratch"}\nAdded pipelining'
+  mock_choice.message.content = (
+    "```python\ndef optimized(): pass\n```\n"
+    '{"block_size": 128, "pipeline_stages": 3, "memory_strategy": "scratch"}\n'
+    "Added pipelining"
+  )
   mock_response.choices = [mock_choice]
   mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 

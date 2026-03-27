@@ -25,7 +25,9 @@ def main():
 def run(config, resume, dry_run):
   """Start an evolution run."""
   cfg = load_config(config)
-  click.echo(f"Loaded config: {cfg.kernel.name} ({len(cfg.shapes)} shapes, {cfg.evolution.max_generations} generations)")
+  click.echo(
+    f"Loaded config: {cfg.kernel.name} ({len(cfg.shapes)} shapes, {cfg.evolution.max_generations} generations)"
+  )
 
   if dry_run:
     click.echo("Dry run complete. Config is valid.")
@@ -45,13 +47,16 @@ def run(config, resume, dry_run):
   reference_code = reference_path.read_text()
 
   from kernel_evolve.llm import create_provider
+
   provider = create_provider(cfg.llm.provider.value, cfg.llm.model, cfg.llm.temperature)
 
-  from kernel_evolve.ci_dispatcher import CIDispatcher, CIConfig
+  from kernel_evolve.ci_dispatcher import CIConfig, CIDispatcher
+
   ci_config = CIConfig(repo=cfg.tpu.cluster, workflow="kernel-eval.yaml")
   evaluator = CIDispatcher(ci_config)
 
   from kernel_evolve.engine import EvolutionEngine
+
   engine = EvolutionEngine(
     config=cfg,
     provider=provider,
@@ -82,6 +87,7 @@ def status(run_dir):
     return
 
   from kernel_evolve.population import Archive
+
   total_variants = 0
   best_fitness = 0.0
   best_id = ""
