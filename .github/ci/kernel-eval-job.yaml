@@ -22,19 +22,16 @@ spec:
     spec:
       containers:
       - name: kernel-eval
-        image: python:3.10
+        image: python:3.12
         command:
         - bash
         - -c
         - |
           set -ex
-          echo "=== TPU Debug ==="
-          ls -la /dev/accel* 2>/dev/null || echo "No /dev/accel* devices"
-          ls -la /dev/vfio/ 2>/dev/null || echo "No /dev/vfio/ directory"
-          env | grep -i tpu || echo "No TPU env vars"
-          apt-get update && apt-get install -y libnuma1 2>/dev/null || true
-          pip install --no-cache-dir jax[tpu] numpy
-          pip install --no-cache-dir --pre --force-reinstall libtpu -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+          pip install uv
+          uv pip install --system --prerelease=allow --no-cache \
+            jax jaxlib libtpu numpy \
+            --extra-index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
           git clone --depth=1 --branch="$BRANCH" \
             "https://github.com/$REPO.git" /workspace 2>/dev/null || \
           (git clone "https://github.com/$REPO.git" /workspace && \
@@ -46,6 +43,10 @@ spec:
           value: "${BRANCH}"
         - name: REPO
           value: "${REPO}"
+        - name: JAX_PLATFORMS
+          value: "tpu,cpu"
+        - name: ENABLE_PJRT_COMPATIBILITY
+          value: "true"
         - name: EVAL_PAYLOAD
           valueFrom:
             configMapKeyRef:
@@ -58,6 +59,13 @@ spec:
             google.com/tpu: "4"
         securityContext:
           privileged: true
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
       nodeSelector:
         cloud.google.com/gke-tpu-accelerator: tpu7x
         cloud.google.com/gke-tpu-topology: 2x2x1
