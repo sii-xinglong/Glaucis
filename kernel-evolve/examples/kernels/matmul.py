@@ -7,15 +7,7 @@ from jax.experimental import pallas as pl
 
 def matmul_kernel(x_ref, y_ref, o_ref):
   # EVOLVE-BLOCK-START
-  BLOCK_K = 128
-  acc = jnp.zeros(o_ref.shape, dtype=jnp.float32)
-  def body(i, acc):
-    x = x_ref[:, pl.ds(i * BLOCK_K, BLOCK_K)]
-    y = y_ref[pl.ds(i * BLOCK_K, BLOCK_K), :]
-    acc += jnp.dot(x, y, preferred_element_type=jnp.float32)
-    return acc
-  k_tiles = x_ref.shape[1] // BLOCK_K
-  acc = jax.lax.fori_loop(0, k_tiles, body, acc)
+  acc = jnp.dot(x_ref[...], y_ref[...], preferred_element_type=jnp.float32)
   o_ref[...] = acc.astype(o_ref.dtype)
   # EVOLVE-BLOCK-END
 
