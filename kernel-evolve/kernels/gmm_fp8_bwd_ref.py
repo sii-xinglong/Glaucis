@@ -1,7 +1,9 @@
 """Reference implementation for backward FP8 transposed grouped matrix multiply (tGMM).
 
-Computes per-group matmul of transposed-activation [K, M] with gradient [M, N],
-using FP8 E4M3 block-wise quantization with 1x128 block scales.
+Computes per-group: output[g] = lhs[slice_g, :]^T @ rhs[slice_g, :]
+  - lhs: [M, K] quantized FP8 E4M3 with 1x128 block scales
+  - rhs: [M, N] quantized FP8 E4M3 with 1x128 block scales
+  - output: [num_groups, K, N] bfloat16
 
 Self-contained: depends only on JAX and numpy.
 """
@@ -67,28 +69,30 @@ def simple_compute(M=2048, K=512, N=1024, num_groups=4):
     key = jax.random.PRNGKey(43)
     k1, k2 = jax.random.split(key)
 
-    # Generate full-precision inputs then quantize
-    lhs_fp = jax.random.normal(k1, (K, M), dtype=jnp.float32)
+    # Generate full-precision inputs then quantize.
+    # lhs is generated as [M, K] (same layout as the kernel), then transposed
+    # for the per-group matmul: lhs.T[:, slice_g] @ rhs[slice_g, :] = [K, N].
+    lhs_fp = jax.random.normal(k1, (M, K), dtype=jnp.float32)
     rhs_fp = jax.random.normal(k2, (M, N), dtype=jnp.float32)
 
     # Quantize with 1x128 block scales along last dimension
-    # lhs [K, M] -> scale shape [K, M//128]
+    # lhs [M, K] -> scale shape [M, K//128]
     # rhs [M, N] -> scale shape [M, N//128]
     lhs_q = _quantize_fp8_blockwise(lhs_fp)
     rhs_q = _quantize_fp8_blockwise(rhs_fp)
 
     # Dequantize for reference computation
-    lhs = _dequantize(lhs_q)
-    rhs = _dequantize(rhs_q)
+    lhs = _dequantize(lhs_q)  # [M, K]
+    rhs = _dequantize(rhs_q)  # [M, N]
 
-    # Per-group matmul: lhs[:, slice_g] @ rhs[slice_g, :] -> [K, N]
+    # Per-group matmul: lhs[slice_g, :].T @ rhs[slice_g, :] = [K, N]
     group_size = M // num_groups
     results = []
     start = 0
     for _ in range(num_groups):
-        lhs_slice = lhs[:, start : start + group_size]  # [K, gs]
+        lhs_slice = lhs[start : start + group_size, :]  # [gs, K]
         rhs_slice = rhs[start : start + group_size, :]  # [gs, N]
-        out_g = jnp.dot(lhs_slice, rhs_slice)  # [K, N] in f32
+        out_g = jnp.dot(lhs_slice.T, rhs_slice)  # [K, N] in f32
         results.append(out_g)
         start += group_size
 

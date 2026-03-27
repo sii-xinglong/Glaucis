@@ -1,7 +1,7 @@
 """FP8 backward transposed grouped matrix multiply (tGMM) Pallas kernel for TPU.
 
-Computes per-group: output[g] = lhs[:, slice_g]^T @ rhs[slice_g, :]
-  - lhs: [K, M] quantized FP8 E4M3 with 1x128 block scales
+Computes per-group: output[g] = lhs[slice_g, :]^T @ rhs[slice_g, :]
+  - lhs: [M, K] quantized FP8 E4M3 with 1x128 block scales
   - rhs: [M, N] quantized FP8 E4M3 with 1x128 block scales
   - output: [num_groups, K, N] bfloat16
 
@@ -117,20 +117,6 @@ def make_group_metadata(
     return m_tile_ids, group_ids_arr, group_offsets_arr, num_active_tiles
 
 
-def _get_store_mask(grid_id, group_offsets, group_ids, m_tile_ids, tm, tile_cols):
-    """Create a boolean mask for rows that belong to the current group.
-
-    Returns a [tm, tile_cols] mask that is True for valid rows.
-    """
-    group = group_ids[grid_id]
-    start = group_offsets[group]
-    end = group_offsets[group + 1]
-    tile_start = m_tile_ids[grid_id] * tm
-    row_indices = tile_start + jnp.arange(tm)
-    valid = (row_indices >= start) & (row_indices < end)
-    return valid[:, None] * jnp.ones((1, tile_cols), dtype=jnp.bool_)
-
-
 # ---------------------------------------------------------------------------
 # Pallas tGMM kernel
 # ---------------------------------------------------------------------------
@@ -204,7 +190,7 @@ def _tgmm_kernel(
 
     @pl.when(is_epilogue)
     def _store():
-        out_ref[...] = acc_scratch[...].astype(jnp.bfloat16)
+        out_ref[0, :, :] = acc_scratch[...].astype(jnp.bfloat16)
     # EVOLVE-BLOCK-END
 
 
@@ -221,33 +207,22 @@ def optimized_compute(M=2048, K=512, N=1024, num_groups=4):
         jnp.array of shape [num_groups, K, N] in bfloat16.
     """
     # --- Generate inputs with same RNG seeds as reference ---
+    # Both kernel and ref generate lhs as [M, K] and rhs as [M, N] directly,
+    # then quantize with 1x128 block scales along the last dimension.
     key = jax.random.PRNGKey(43)
     k1, k2 = jax.random.split(key)
 
-    lhs_fp = jax.random.normal(k1, (K, M), dtype=jnp.float32)
+    lhs_fp = jax.random.normal(k1, (M, K), dtype=jnp.float32)
     rhs_fp = jax.random.normal(k2, (M, N), dtype=jnp.float32)
 
     # Quantize with 1x128 block scales along last dimension
-    lhs_q = _quantize_fp8_blockwise(lhs_fp)  # qvalue [K, M], scale [K, M//128]
+    lhs_q = _quantize_fp8_blockwise(lhs_fp)  # qvalue [M, K], scale [M, K//128]
     rhs_q = _quantize_fp8_blockwise(rhs_fp)  # qvalue [M, N], scale [M, N//128]
 
-    # --- Prepare inputs for Pallas ---
-    # The kernel needs lhs as [M, K] for tile-based loading.
-    # Transpose qvalue and scale accordingly.
-    # lhs_q.qvalue: [K, M] -> [M, K]
-    # lhs_q.scale:  [K, M//128] -> need [M, K//128] after transpose
-    # We re-quantize the transposed version for correct block-scale alignment.
-    lhs_deq = _dequantize(lhs_q)  # [K, M] float32
-    lhs_t = lhs_deq.T  # [M, K]
-    lhs_t_q = _quantize_fp8_blockwise(lhs_t)  # qvalue [M, K], scale [M, K//128]
-
-    rhs_deq = _dequantize(rhs_q)  # [M, N] float32
-    rhs_t_q = _quantize_fp8_blockwise(rhs_deq)  # qvalue [M, N], scale [M, N//128]
-
-    lhs_qv = lhs_t_q.qvalue   # [M, K] fp8
-    lhs_scale = lhs_t_q.scale  # [M, K//128] f32
-    rhs_qv = rhs_t_q.qvalue   # [M, N] fp8
-    rhs_scale = rhs_t_q.scale  # [M, N//128] f32
+    lhs_qv = lhs_q.qvalue   # [M, K] fp8
+    lhs_scale = lhs_q.scale  # [M, K//128] f32
+    rhs_qv = rhs_q.qvalue   # [M, N] fp8
+    rhs_scale = rhs_q.scale  # [M, N//128] f32
 
     # --- Group metadata ---
     group_size_each = M // num_groups
@@ -313,7 +288,7 @@ def optimized_compute(M=2048, K=512, N=1024, num_groups=4):
                 pl.BlockSpec((tm, tn), rhs_index_map),
                 pl.BlockSpec((tm, rhs_scale_block_n), rhs_scale_index_map),
             ],
-            out_specs=pl.BlockSpec((None, tk, tn), out_index_map),
+            out_specs=pl.BlockSpec((1, tk, tn), out_index_map),
             scratch_shapes=[pltpu.VMEM((tk, tn), jnp.float32)],
         ),
         compiler_params=pltpu.TPUCompilerParams(
