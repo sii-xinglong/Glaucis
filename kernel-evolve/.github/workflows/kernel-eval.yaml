@@ -1,0 +1,23 @@
+name: Kernel Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      eval_payload:
+        description: "Base64-encoded evaluation request"
+        required: true
+        type: string
+      variant_id:
+        description: "Variant identifier"
+        required: true
+        type: string
+
+jobs:
+  evaluate:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    container:
+      image: ${{ vars.KERNEL_EVAL_IMAGE }}
+    steps:
+      - name: Run evaluation
+        run: python /app/evaluate.py --eval-payload "${{ inputs.eval_payload }}"
