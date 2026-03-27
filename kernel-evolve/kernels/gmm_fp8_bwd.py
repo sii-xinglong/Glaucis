@@ -122,6 +122,8 @@ def make_group_metadata(
 # ---------------------------------------------------------------------------
 
 def _tgmm_kernel(
+    group_metadata_ref,
+    group_offsets_ref,
     lhs_qv_ref,
     lhs_scale_ref,
     rhs_qv_ref,
@@ -129,9 +131,6 @@ def _tgmm_kernel(
     out_ref,
     acc_scratch,
     *,
-    group_ids,
-    group_offsets,
-    m_tile_ids,
     num_active_tiles,
     tm,
     tk,
@@ -141,14 +140,14 @@ def _tgmm_kernel(
     grid_id = pl.program_id(2)  # m-tile iterator
     num_programs = num_active_tiles
 
-    # Group transition tracking
-    group = group_ids[grid_id]
-    prev_group = group_ids[jnp.maximum(0, grid_id - 1)]
+    # Group transition tracking via scalar prefetch refs
+    group = group_metadata_ref[0, grid_id]
+    prev_group = group_metadata_ref[0, jnp.maximum(0, grid_id - 1)]
     last = num_programs - 1
-    next_group = group_ids[jnp.minimum(grid_id + 1, last)]
+    next_group = group_metadata_ref[0, jnp.minimum(grid_id + 1, last)]
     is_prologue = (grid_id == 0) | (group != prev_group)
     is_epilogue = (grid_id == last) | (group != next_group)
-    group_size = group_offsets[group + 1] - group_offsets[group]
+    group_size = group_offsets_ref[group + 1] - group_offsets_ref[group]
 
     @pl.when(is_prologue)
     def _zero():
@@ -160,9 +159,10 @@ def _tgmm_kernel(
         rhs_tile = rhs_qv_ref[...].astype(jnp.float32)     # [tm, tn]
 
         # Group boundary mask
-        tile_start = m_tile_ids[grid_id] * tm
-        group_start = group_offsets[group]
-        group_end = group_offsets[group + 1]
+        m_tid = group_metadata_ref[1, grid_id]
+        tile_start = m_tid * tm
+        group_start = group_offsets_ref[group]
+        group_end = group_offsets_ref[group + 1]
         row_indices = tile_start + jnp.arange(tm)
         valid = (row_indices >= group_start) & (row_indices < group_end)
 
@@ -171,20 +171,21 @@ def _tgmm_kernel(
         lhs_tile = jnp.where(mask_lhs, lhs_tile, 0.0)
         rhs_tile = jnp.where(mask_rhs, rhs_tile, 0.0)
 
-        # Apply block-wise scales before dot (required for per-element scaling).
-        # lhs_scale_ref: [tm, tk // 128], rhs_scale_ref: [tm, tn // 128]
-        lhs_s = lhs_scale_ref[...].astype(jnp.float32)   # [tm, tk // 128]
-        rhs_s = rhs_scale_ref[...].astype(jnp.float32)   # [tm, tn // 128]
+        # Apply block-wise scales before dot (scales vary along M contraction dim).
+        lhs_s = lhs_scale_ref[...].astype(jnp.float32)   # [tm, 1]
+        rhs_s = rhs_scale_ref[...].astype(jnp.float32)   # [tm, 1]
 
-        # Expand scales to match tile dimensions
-        lhs_s_exp = jnp.repeat(lhs_s, BLOCK_SIZE, axis=1)  # [tm, tk]
-        rhs_s_exp = jnp.repeat(rhs_s, BLOCK_SIZE, axis=1)  # [tm, tn]
+        # Dequantize and cast to BF16 for TPU MXU compatibility.
+        lhs_scaled = (lhs_tile * lhs_s).astype(jnp.bfloat16)   # [tm, tk]
+        rhs_scaled = (rhs_tile * rhs_s).astype(jnp.bfloat16)   # [tm, tn]
 
-        lhs_scaled = lhs_tile * lhs_s_exp   # [tm, tk] dequantized
-        rhs_scaled = rhs_tile * rhs_s_exp   # [tm, tn] dequantized
-
-        # Transposed dot: [tm, tk]^T @ [tm, tn] = [tk, tn]
-        out = jnp.dot(lhs_scaled.T, rhs_scaled)  # [tk, tn] in f32
+        # Transposed dot: [tk, tm] @ [tm, tn] = [tk, tn] with f32 accumulation
+        out = jax.lax.dot_general(
+            lhs_scaled.T,  # [tk, tm]
+            rhs_scaled,    # [tm, tn]
+            dimension_numbers=(((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+        )
 
         acc_scratch[...] += out
 
@@ -247,29 +248,30 @@ def optimized_compute(M=2048, K=512, N=1024, num_groups=4):
     # --- Pallas call ---
     grid = (tiles_n, tiles_k, num_active_tiles)
 
-    def lhs_index_map(n_i, k_i, grid_id):
-        return (m_tile_ids[grid_id], k_i)
+    # Pack group_ids and m_tile_ids for scalar prefetch (like forward kernel).
+    # group_metadata: [2, num_active_tiles]  row-0 = group_ids, row-1 = m_tile_ids
+    group_metadata = jnp.stack([group_ids, m_tile_ids], axis=0)
 
-    def lhs_scale_index_map(n_i, k_i, grid_id):
-        return (m_tile_ids[grid_id], k_i)
+    def lhs_index_map(n_i, k_i, grid_id, group_metadata_ref, group_offsets_ref):
+        return (group_metadata_ref[1, grid_id], k_i)
 
-    def rhs_index_map(n_i, k_i, grid_id):
-        return (m_tile_ids[grid_id], n_i)
+    def lhs_scale_index_map(n_i, k_i, grid_id, group_metadata_ref, group_offsets_ref):
+        return (group_metadata_ref[1, grid_id], k_i)
 
-    def rhs_scale_index_map(n_i, k_i, grid_id):
-        return (m_tile_ids[grid_id], n_i)
+    def rhs_index_map(n_i, k_i, grid_id, group_metadata_ref, group_offsets_ref):
+        return (group_metadata_ref[1, grid_id], n_i)
 
-    def out_index_map(n_i, k_i, grid_id):
-        return (group_ids[grid_id], k_i, n_i)
+    def rhs_scale_index_map(n_i, k_i, grid_id, group_metadata_ref, group_offsets_ref):
+        return (group_metadata_ref[1, grid_id], n_i)
+
+    def out_index_map(n_i, k_i, grid_id, group_metadata_ref, group_offsets_ref):
+        return (group_metadata_ref[0, grid_id], k_i, n_i)
 
     lhs_scale_block_k = max(tk // BLOCK_SIZE, 1)
     rhs_scale_block_n = max(tn // BLOCK_SIZE, 1)
 
     kernel_fn = partial(
         _tgmm_kernel,
-        group_ids=group_ids,
-        group_offsets=group_offsets,
-        m_tile_ids=m_tile_ids,
         num_active_tiles=num_active_tiles,
         tm=tm,
         tk=tk,
@@ -280,7 +282,7 @@ def optimized_compute(M=2048, K=512, N=1024, num_groups=4):
         kernel_fn,
         out_shape=jax.ShapeDtypeStruct((num_groups, K, N), jnp.bfloat16),
         grid_spec=pltpu.PrefetchScalarGridSpec(
-            num_scalar_prefetch=0,
+            num_scalar_prefetch=2,
             grid=grid,
             in_specs=[
                 pl.BlockSpec((tm, tk), lhs_index_map),
@@ -291,9 +293,9 @@ def optimized_compute(M=2048, K=512, N=1024, num_groups=4):
             out_specs=pl.BlockSpec((1, tk, tn), out_index_map),
             scratch_shapes=[pltpu.VMEM((tk, tn), jnp.float32)],
         ),
-        compiler_params=pltpu.TPUCompilerParams(
+        compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "arbitrary", "arbitrary"),
         ),
-    )(lhs_qv, lhs_scale, rhs_qv, rhs_scale)
+    )(group_metadata, group_offsets, lhs_qv, lhs_scale, rhs_qv, rhs_scale)
 
     return result

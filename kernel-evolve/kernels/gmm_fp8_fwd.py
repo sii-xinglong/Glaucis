@@ -286,7 +286,7 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
         _kernel,
         grid_spec=grid_spec,
         out_shape=jax.ShapeDtypeStruct((M, N), jnp.bfloat16),
-        compiler_params=pltpu.TPUCompilerParams(
+        compiler_params=pltpu.CompilerParams(
             dimension_semantics=("parallel", "arbitrary", "arbitrary"),
         ),
     )
