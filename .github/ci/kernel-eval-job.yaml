@@ -30,7 +30,7 @@ spec:
           set -ex
           echo "=== TPU Debug ==="
           ls -la /dev/accel* 2>/dev/null || echo "No /dev/accel* devices"
-          ls -la /dev/vfio* 2>/dev/null || echo "No /dev/vfio* devices"
+          ls -la /dev/vfio/ 2>/dev/null || echo "No /dev/vfio/ directory"
           env | grep -i tpu || echo "No TPU env vars"
           pip install --no-cache-dir jax[tpu] numpy
           git clone --depth=1 --branch="$BRANCH" \

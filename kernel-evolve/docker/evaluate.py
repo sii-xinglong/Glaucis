@@ -23,6 +23,12 @@ def _has_tpu() -> bool:
     has = any(d.platform == "tpu" for d in devices)
     if not has:
       print(f"JAX default backend: {jax.default_backend()}", file=sys.stderr)
+      try:
+        tpu_devices = jax.devices("tpu")
+        print(f"TPU devices (explicit): {tpu_devices}", file=sys.stderr)
+        has = len(tpu_devices) > 0
+      except RuntimeError as e:
+        print(f"TPU backend error: {e}", file=sys.stderr)
     return has
   except Exception as e:
     print(f"TPU detection error: {e}", file=sys.stderr)
