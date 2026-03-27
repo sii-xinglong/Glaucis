@@ -20,16 +20,14 @@ jobs:
   evaluate:
     runs-on: arc-runner-set
     timeout-minutes: 10
-    container:
-      image: us-central1-docker.pkg.dev/tpu-service-473302/glaucis/kernel-eval:latest
     steps:
-      - name: Clone repository at specified ref
-        run: |
-          git clone --depth 1 --branch "${{ inputs.ref }}" \
-            https://github.com/${{ github.repository }}.git /workspace || \
-          (git clone https://github.com/${{ github.repository }}.git /workspace && \
-           cd /workspace && git checkout "${{ inputs.ref }}")
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install dependencies
+        run: python3 -m pip install --no-cache-dir jax[tpu] numpy -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
       - name: Run evaluation
-        working-directory: /workspace
-        run: python kernel-evolve/evaluate.py --eval-payload "${{ inputs.eval_payload }}"
+        run: python3 kernel-evolve/docker/evaluate.py --eval-payload "${{ inputs.eval_payload }}"

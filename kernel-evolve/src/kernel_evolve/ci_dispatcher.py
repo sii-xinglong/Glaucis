@@ -49,6 +49,8 @@ class CIDispatcher(Evaluator):
       "--ref",
       self._config.branch,
       "-f",
+      f"ref={self._config.branch}",
+      "-f",
       f"eval_payload={payload}",
       "-f",
       f"variant_id={request.variant_id}",
