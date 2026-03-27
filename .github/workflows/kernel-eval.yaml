@@ -1,0 +1,35 @@
+name: Kernel Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch name or commit SHA to evaluate"
+        required: true
+        type: string
+      eval_payload:
+        description: "Base64-encoded evaluation request"
+        required: true
+        type: string
+      variant_id:
+        description: "Variant identifier"
+        required: true
+        type: string
+
+jobs:
+  evaluate:
+    runs-on: arc-runner-set
+    timeout-minutes: 10
+    container:
+      image: us-central1-docker.pkg.dev/tpu-service-473302/glaucis/kernel-eval:latest
+    steps:
+      - name: Clone repository at specified ref
+        run: |
+          git clone --depth 1 --branch "${{ inputs.ref }}" \
+            https://github.com/${{ github.repository }}.git /workspace || \
+          (git clone https://github.com/${{ github.repository }}.git /workspace && \
+           cd /workspace && git checkout "${{ inputs.ref }}")
+
+      - name: Run evaluation
+        working-directory: /workspace
+        run: python kernel-evolve/evaluate.py --eval-payload "${{ inputs.eval_payload }}"
