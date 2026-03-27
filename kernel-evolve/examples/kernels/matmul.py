@@ -12,7 +12,7 @@ def matmul_kernel(x_ref, y_ref, o_ref):
   def body(i, acc):
     x = x_ref[:, pl.ds(i * BLOCK_K, BLOCK_K)]
     y = y_ref[pl.ds(i * BLOCK_K, BLOCK_K), :]
-    acc += jnp.dot(x, y)
+    acc += jnp.dot(x, y, preferred_element_type=jnp.float32)
     return acc
   k_tiles = x_ref.shape[1] // BLOCK_K
   acc = jax.lax.fori_loop(0, k_tiles, body, acc)
