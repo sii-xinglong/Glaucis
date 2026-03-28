@@ -7,8 +7,10 @@ kernel:
     end: "# EVOLVE-BLOCK-END"
 
 shapes:
-  - { M: 4096, K: 7168, N: 2048, num_groups: 8 }
-  - { M: 8192, K: 7168, N: 2048, num_groups: 64 }
+  # up/gate projection: [~8192, 2048] × [32, 2048, 512]
+  - { M: 8192, K: 2048, N: 512, num_groups: 32 }
+  # down projection: [~8192, 512] × [32, 512, 2048]
+  - { M: 8192, K: 512, N: 2048, num_groups: 32 }
 
 correctness:
   method: "allclose"
