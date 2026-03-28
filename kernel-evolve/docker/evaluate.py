@@ -15,6 +15,26 @@ def decode_request(b64_payload: str) -> dict[str, Any]:
   return json.loads(base64.b64decode(b64_payload).decode())
 
 
+def _has_tpu() -> bool:
+  try:
+    import jax
+    devices = jax.devices()
+    print(f"JAX devices: {devices}", file=sys.stderr)
+    has = any(d.platform == "tpu" for d in devices)
+    if not has:
+      print(f"JAX default backend: {jax.default_backend()}", file=sys.stderr)
+      try:
+        tpu_devices = jax.devices("tpu")
+        print(f"TPU devices (explicit): {tpu_devices}", file=sys.stderr)
+        has = len(tpu_devices) > 0
+      except RuntimeError as e:
+        print(f"TPU backend error: {e}", file=sys.stderr)
+    return has
+  except Exception as e:
+    print(f"TPU detection error: {e}", file=sys.stderr)
+    return False
+
+
 def stage_compile(kernel_code: str) -> dict[str, Any]:
   try:
     exec_globals = {}
@@ -72,6 +92,10 @@ def main():
   parser.add_argument("--eval-payload", required=True)
   args = parser.parse_args()
   request = decode_request(args.eval_payload)
+
+  if not _has_tpu():
+    print("ERROR: No TPU detected. This evaluator requires a TPU device.", file=sys.stderr)
+    sys.exit(1)
 
   compile_result = stage_compile(request["kernel_code"])
   if not compile_result["ok"]:

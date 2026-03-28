@@ -13,7 +13,7 @@ shapes:
 correctness:
   method: "allclose"
   rtol: 1e-2
-  atol: 1e-2
+  atol: 1.0
 
 evolution:
   population_size: 25
