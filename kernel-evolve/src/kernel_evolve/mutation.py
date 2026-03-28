@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import textwrap
 
 DEFAULT_START_MARKER = "# EVOLVE-BLOCK-START"
 DEFAULT_END_MARKER = "# EVOLVE-BLOCK-END"
@@ -25,7 +26,8 @@ def extract_evolve_block(
     raise ValueError(f"Could not find start marker: {start_marker}")
   if end_idx is None:
     raise ValueError(f"Could not find end marker: {end_marker}")
-  return "\n".join(lines[start_idx + 1 : end_idx])
+  block = "\n".join(lines[start_idx + 1 : end_idx])
+  return textwrap.dedent(block)
 
 
 def inject_evolve_block(
