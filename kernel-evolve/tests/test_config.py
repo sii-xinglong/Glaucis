@@ -31,7 +31,7 @@ def test_config_defaults():
   cfg = EvolveConfig(
     kernel={"name": "test", "template": "k.py", "reference": "r.py"},
     shapes=[{"M": 64, "N": 64, "K": 64}],
-    llm={"provider": "anthropic", "model": "claude-sonnet-4-6"},
+    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
     tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
   )
   assert cfg.evolution.population_size == 25

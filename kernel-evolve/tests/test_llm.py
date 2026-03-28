@@ -51,7 +51,7 @@ async def test_anthropic_provider_mutate():
   mock_client.messages.create = AsyncMock(return_value=mock_message)
 
   with patch("kernel_evolve.llm.anthropic_provider.AsyncAnthropic", return_value=mock_client):
-    provider = AnthropicProvider(model="claude-sonnet-4-6", temperature=0.7)
+    provider = AnthropicProvider(model="claude-opus-4-6", temperature=0.7)
     req = MutationRequest(parent_code="def kernel(): pass", fitness=1.0, generation=1)
     resp = await provider.mutate(req)
     assert "optimized" in resp.mutated_code
