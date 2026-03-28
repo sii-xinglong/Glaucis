@@ -59,9 +59,19 @@ def run(config, resume, dry_run):
   else:
     from kernel_evolve.kube_evaluator import KubeConfig, KubeEvaluator
 
+    # Resolve job_template relative to repo root if not absolute
+    job_template_path = Path(cfg.evaluator.job_template)
+    if not job_template_path.is_absolute():
+      repo_root = config_dir
+      while repo_root != repo_root.parent:
+        if (repo_root / ".git").exists():
+          break
+        repo_root = repo_root.parent
+      job_template_path = repo_root / cfg.evaluator.job_template
+
     kube_config = KubeConfig(
       namespace=cfg.evaluator.namespace,
-      job_template=cfg.evaluator.job_template,
+      job_template=str(job_template_path),
       repo=cfg.evaluator.repo,
       branch=cfg.evaluator.branch,
       poll_interval=cfg.evaluator.poll_interval,
