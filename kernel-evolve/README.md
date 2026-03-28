@@ -92,7 +92,7 @@ evolution:
 
 llm:
   provider: "anthropic"               # anthropic | google | openai
-  model: "claude-sonnet-4-6"
+  model: "claude-opus-4-6"
   temperature: 0.7
 ```
 
@@ -157,4 +157,4 @@ pip install -e ".[google]"      # Gemini
 pip install -e ".[openai]"      # Codex / GPT
 ```
 
-Set the corresponding API key environment variable (`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, or `OPENAI_API_KEY`).
+Set the corresponding API key environment variable (`ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, or `OPENAI_API_KEY`). Optionally set `ANTHROPIC_BASE_URL` to use a custom API endpoint.

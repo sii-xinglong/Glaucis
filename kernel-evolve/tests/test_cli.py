@@ -24,7 +24,7 @@ shapes:
   - {{ M: 64 }}
 llm:
   provider: "anthropic"
-  model: "claude-sonnet-4-6"
+  model: "claude-opus-4-6"
 tpu:
   cluster: "c"
   zone: "z"

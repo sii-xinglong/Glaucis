@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from kernel_evolve.llm.base import LLMProvider, MutationRequest, MutationResponse
@@ -32,10 +33,12 @@ Output format:
 
 
 class AnthropicProvider(LLMProvider):
-  def __init__(self, model: str = "claude-sonnet-4-6", temperature: float = 0.7):
+  def __init__(self, model: str = "claude-opus-4-6", temperature: float = 0.7):
     self._model = model
     self._temperature = temperature
-    self._client = AsyncAnthropic()
+    api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    self._client = AsyncAnthropic(api_key=api_key, base_url=base_url)
 
   async def mutate(self, request: MutationRequest) -> MutationResponse:
     user_prompt = self._build_prompt(request)

@@ -16,7 +16,7 @@ def minimal_config():
     kernel={"name": "test", "template": "k.py", "reference": "r.py"},
     shapes=[{"M": 64, "N": 64, "K": 64}],
     evolution={"population_size": 4, "num_islands": 1, "max_generations": 3, "stagnation_limit": 2},
-    llm={"provider": "anthropic", "model": "claude-sonnet-4-6"},
+    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
     tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
     logging={"output_dir": "/tmp/test_run"},
   )
