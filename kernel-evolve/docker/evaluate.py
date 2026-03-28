@@ -35,18 +35,6 @@ def _has_tpu() -> bool:
     return False
 
 
-def _enable_interpret_mode():
-  """Monkey-patch pallas_call to use interpret=True when no TPU is available."""
-  from jax.experimental import pallas as pl
-  _original = pl.pallas_call
-
-  def _patched(*args, **kwargs):
-    kwargs.setdefault("interpret", True)
-    return _original(*args, **kwargs)
-
-  pl.pallas_call = _patched
-
-
 def stage_compile(kernel_code: str) -> dict[str, Any]:
   try:
     exec_globals = {}
@@ -105,10 +93,9 @@ def main():
   args = parser.parse_args()
   request = decode_request(args.eval_payload)
 
-  has_tpu = _has_tpu()
-  if not has_tpu:
-    print("WARNING: No TPU detected, using interpret mode for correctness check", file=sys.stderr)
-    _enable_interpret_mode()
+  if not _has_tpu():
+    print("ERROR: No TPU detected. This evaluator requires a TPU device.", file=sys.stderr)
+    sys.exit(1)
 
   compile_result = stage_compile(request["kernel_code"])
   if not compile_result["ok"]:
@@ -121,12 +108,6 @@ def main():
   )
   if not correct_result["ok"]:
     print(f'EVAL_RESULT:{json.dumps({"status": "INCORRECT", "error": correct_result["error"], "max_diff": correct_result["max_diff"]})}')
-    sys.exit(0)
-
-  if not has_tpu:
-    result = {"status": "SUCCESS", "fitness": 0.0, "latency_ms": 0.0, "speedup": 0.0, "flops": 0.0,
-              "metadata": {"note": "No TPU available, correctness verified with interpret mode, performance skipped"}}
-    print(f"EVAL_RESULT:{json.dumps(result)}")
     sys.exit(0)
 
   perf_result = stage_performance(compile_result["globals"], request["shapes"])
