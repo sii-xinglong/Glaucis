@@ -11,7 +11,7 @@ from kernel_evolve.evaluator import EvalRequest, EvalResult, EvalStatus, Evaluat
 from kernel_evolve.llm.base import LLMProvider, MutationRequest
 from kernel_evolve.mutation import extract_evolve_block, inject_evolve_block, validate_syntax
 from kernel_evolve.perf_log import PerfLog
-from kernel_evolve.population import Archive, BehaviorDescriptor, Variant
+from kernel_evolve.population import Archive, BehaviorDescriptor, Variant, ratio_to_compute_profile
 
 FOCUS_AREAS = ["tiling", "memory_access", "compute_optimization", "vectorization", "pipelining"]
 
@@ -188,6 +188,7 @@ class EvolutionEngine:
     result = await self._evaluator.evaluate(eval_request)
 
     variant.fitness = result.fitness
+    variant.descriptor.compute_profile = ratio_to_compute_profile(result.compute_ratio)
     island.insert(variant)
 
     return variant, result, response.explanation
