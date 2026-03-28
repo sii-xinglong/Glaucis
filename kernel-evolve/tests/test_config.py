@@ -23,7 +23,7 @@ def test_load_config_from_yaml(example_config_path):
   assert cfg.evolution.population_size == 25
   assert cfg.evolution.num_islands == 3
   assert cfg.llm.provider == "anthropic"
-  assert cfg.tpu.tpu_type == "v4-8"
+  assert cfg.tpu.tpu_type == "v7x"
   assert cfg.logging.perf_log is True
 
 

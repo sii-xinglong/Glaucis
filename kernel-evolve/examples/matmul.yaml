@@ -27,12 +27,21 @@ llm:
   model: "claude-opus-4-6"
   temperature: 0.7
 
-tpu:
-  cluster: "my-gke-cluster"
-  zone: "us-central2-b"
-  tpu_type: "v4-8"
+evaluator:
+  type: "kube"
   namespace: "default"
-  image: "gcr.io/my-project/kernel-eval:latest"
+  job_template: ".github/ci/kernel-eval-job.yaml"
+  repo: "sii-xinglong/Glaucis"
+  branch: "main"
+  poll_interval: 15
+  timeout: 600
+
+tpu:
+  cluster: "tpu7x-cluster"
+  zone: "us-central1"
+  tpu_type: "v7x"
+  namespace: "default"
+  image: "python:3.12"
   timeout: 300
 
 logging:
