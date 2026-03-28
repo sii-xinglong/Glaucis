@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import string
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,9 +30,10 @@ class KubeEvaluator(Evaluator):
     self._config = config
 
   def _make_job_name(self, variant_id: str) -> str:
-    safe_id = variant_id.lower().replace("_", "-")
+    safe_id = re.sub(r"[^a-z0-9-]", "-", variant_id.lower())
+    safe_id = re.sub(r"-+", "-", safe_id).strip("-")
     name = f"kernel-eval-{safe_id}"
-    return name[:63]
+    return name[:63].rstrip("-")
 
   def _render_job_yaml(self, job_name: str, request: EvalRequest) -> str:
     template_text = Path(self._config.job_template).read_text()
@@ -102,8 +105,8 @@ class KubeEvaluator(Evaluator):
       raise RuntimeError(f"Failed to apply Job: {stderr}")
 
   async def _poll_job(self, job_name: str) -> str:
-    elapsed = 0
-    while elapsed < self._config.timeout:
+    deadline = time.monotonic() + self._config.timeout
+    while time.monotonic() < deadline:
       stdout, _, rc = await self._run_kubectl(
         "get",
         "job",
@@ -119,7 +122,6 @@ class KubeEvaluator(Evaluator):
       if "Failed" in conditions:
         return "Failed"
       await asyncio.sleep(self._config.poll_interval)
-      elapsed += self._config.poll_interval
     return "timed_out"
 
   async def _read_logs(self, job_name: str) -> str:

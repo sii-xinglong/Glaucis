@@ -48,6 +48,15 @@ def test_job_name_generation(kube_config):
   assert len(name) <= 63
 
 
+def test_job_name_sanitizes_special_chars(kube_config):
+  evaluator = KubeEvaluator(kube_config)
+  name = evaluator._make_job_name("v001.gen5_abc123")
+  assert name.startswith("kernel-eval-")
+  assert "." not in name
+  assert not name.endswith("-")
+  assert len(name) <= 63
+
+
 def test_render_job_yaml(kube_config, eval_request, tmp_path):
   template = tmp_path / "job.yaml"
   template.write_text("name: ${JOB_NAME}\nrepo: ${REPO}\nbranch: ${BRANCH}\nvariant: ${VARIANT_ID}\n")
