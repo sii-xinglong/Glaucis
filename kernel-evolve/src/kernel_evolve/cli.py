@@ -33,8 +33,9 @@ def run(config, resume, dry_run):
     click.echo("Dry run complete. Config is valid.")
     return
 
-  template_path = Path(cfg.kernel.template)
-  reference_path = Path(cfg.kernel.reference)
+  config_dir = Path(config).resolve().parent
+  template_path = config_dir / cfg.kernel.template
+  reference_path = config_dir / cfg.kernel.reference
 
   if not template_path.exists():
     click.echo(f"Error: template file not found: {template_path}", err=True)
