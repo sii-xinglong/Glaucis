@@ -24,6 +24,8 @@ class EvalResult:
   latency_ms: float = 0.0
   speedup: float = 0.0
   flops: float = 0.0
+  compute_ratio: float | None = None
+  memory_transfer_ratio: float | None = None
   metadata: dict[str, Any] = field(default_factory=dict)
 
   @classmethod
@@ -35,8 +37,23 @@ class EvalResult:
     return cls(status=EvalStatus.INCORRECT, max_diff=max_diff, error=error)
 
   @classmethod
-  def success(cls, latency_ms: float, speedup: float, flops: float = 0.0) -> EvalResult:
-    return cls(status=EvalStatus.SUCCESS, fitness=speedup, latency_ms=latency_ms, speedup=speedup, flops=flops)
+  def success(
+    cls,
+    latency_ms: float,
+    speedup: float,
+    flops: float = 0.0,
+    compute_ratio: float | None = None,
+    memory_transfer_ratio: float | None = None,
+  ) -> EvalResult:
+    return cls(
+      status=EvalStatus.SUCCESS,
+      fitness=speedup,
+      latency_ms=latency_ms,
+      speedup=speedup,
+      flops=flops,
+      compute_ratio=compute_ratio,
+      memory_transfer_ratio=memory_transfer_ratio,
+    )
 
   def to_dict(self) -> dict[str, Any]:
     return {
@@ -47,6 +64,8 @@ class EvalResult:
       "latency_ms": self.latency_ms,
       "speedup": self.speedup,
       "flops": self.flops,
+      "compute_ratio": self.compute_ratio,
+      "memory_transfer_ratio": self.memory_transfer_ratio,
       "metadata": self.metadata,
     }
 
@@ -60,6 +79,8 @@ class EvalResult:
       latency_ms=data.get("latency_ms", 0.0),
       speedup=data.get("speedup", 0.0),
       flops=data.get("flops", 0.0),
+      compute_ratio=data.get("compute_ratio"),
+      memory_transfer_ratio=data.get("memory_transfer_ratio"),
       metadata=data.get("metadata", {}),
     )
 
