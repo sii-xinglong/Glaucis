@@ -50,10 +50,23 @@ def run(config, resume, dry_run):
 
   provider = create_provider(cfg.llm.provider.value, cfg.llm.model, cfg.llm.temperature)
 
-  from kernel_evolve.ci_dispatcher import CIConfig, CIDispatcher
+  if cfg.evaluator.type.value == "ci":
+    from kernel_evolve.ci_dispatcher import CIConfig, CIDispatcher
 
-  ci_config = CIConfig(repo=cfg.tpu.cluster, workflow="kernel-eval.yaml")
-  evaluator = CIDispatcher(ci_config)
+    ci_config = CIConfig(repo=cfg.evaluator.repo, workflow="kernel-eval.yaml")
+    evaluator = CIDispatcher(ci_config)
+  else:
+    from kernel_evolve.kube_evaluator import KubeConfig, KubeEvaluator
+
+    kube_config = KubeConfig(
+      namespace=cfg.evaluator.namespace,
+      job_template=cfg.evaluator.job_template,
+      repo=cfg.evaluator.repo,
+      branch=cfg.evaluator.branch,
+      poll_interval=cfg.evaluator.poll_interval,
+      timeout=cfg.evaluator.timeout,
+    )
+    evaluator = KubeEvaluator(kube_config)
 
   from kernel_evolve.engine import EvolutionEngine
 
