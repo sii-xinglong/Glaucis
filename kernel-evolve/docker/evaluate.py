@@ -58,7 +58,11 @@ def stage_correctness(kernel_code, reference_code, shapes, rtol, atol, exec_glob
       ref_out = ref_fn(**shape)
       max_diff = float(np.max(np.abs(np.array(kernel_out) - np.array(ref_out))))
       if max_diff > atol:
-        return {"ok": False, "error": f"Correctness failed for shape {shape}: max_diff={max_diff}", "max_diff": max_diff}
+        return {
+          "ok": False,
+          "error": f"Correctness failed for shape {shape}: max_diff={max_diff}",
+          "max_diff": max_diff,
+        }
     return {"ok": True, "max_diff": 0.0}
   except Exception:
     return {"ok": False, "error": f"Correctness error: {traceback.format_exc()}", "max_diff": 0.0}
@@ -66,7 +70,6 @@ def stage_correctness(kernel_code, reference_code, shapes, rtol, atol, exec_glob
 
 def stage_performance(exec_globals, shapes, warmup=10, iters=50):
   try:
-    import jax
     kernel_fn = exec_globals.get("optimized_compute") or exec_globals.get("kernel_fn")
     if kernel_fn is None:
       return {"ok": False, "error": "No kernel_fn found"}
@@ -95,8 +98,9 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
   Non-fatal: returns ok=False on failure without stopping the evaluation pipeline.
   """
   try:
-    import jax
     from pathlib import Path
+
+    import jax
 
     try:
       from xprof.convert import raw_to_tool_data
@@ -223,7 +227,12 @@ def main():
     request.get("rtol", 1e-2), request.get("atol", 1e-2), compile_result["globals"],
   )
   if not correct_result["ok"]:
-    print(f'EVAL_RESULT:{json.dumps({"status": "INCORRECT", "error": correct_result["error"], "max_diff": correct_result["max_diff"]})}')
+    result_data = {
+      "status": "INCORRECT",
+      "error": correct_result["error"],
+      "max_diff": correct_result["max_diff"],
+    }
+    print(f"EVAL_RESULT:{json.dumps(result_data)}")
     sys.exit(0)
 
   perf_result = stage_performance(compile_result["globals"], request["shapes"])
