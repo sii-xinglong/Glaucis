@@ -1,10 +1,10 @@
-"""Tests for YAML config parsing and validation."""
+"""Tests for simplified YAML config parsing and validation."""
 
 from pathlib import Path
 
 import pytest
 
-from kernel_evolve.config import EvolveConfig, load_config
+from kernel_evolve.config import EvolveConfig, SessionConfig, load_config
 
 
 @pytest.fixture
@@ -20,65 +20,67 @@ def test_load_config_from_yaml(example_config_path):
   assert cfg.shapes[0]["M"] == 1024
   assert cfg.correctness.method == "allclose"
   assert cfg.correctness.rtol == pytest.approx(1e-2)
-  assert cfg.evolution.population_size == 25
-  assert cfg.evolution.num_islands == 3
-  assert cfg.llm.provider == "anthropic"
-  assert cfg.tpu.tpu_type == "v7x"
-  assert cfg.logging.perf_log is True
+  assert cfg.tpu.cluster == "tpu7x-cluster"
+  assert cfg.session.max_iterations == 20
+  assert cfg.session.output_dir == "runs/matmul"
 
 
 def test_config_defaults():
   cfg = EvolveConfig(
     kernel={"name": "test", "template": "k.py", "reference": "r.py"},
     shapes=[{"M": 64, "N": 64, "K": 64}],
-    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
-    tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
+    tpu={"cluster": "c", "zone": "z"},
   )
-  assert cfg.evolution.population_size == 25
-  assert cfg.evolution.max_generations == 50
-  assert cfg.evolution.stagnation_limit == 10
   assert cfg.correctness.method == "allclose"
-  assert cfg.logging.output_dir == "runs/default"
+  assert cfg.evaluator.namespace == "default"
+  assert cfg.evaluator.poll_interval == 15
+  assert cfg.evaluator.timeout == 600
+  assert cfg.session.max_iterations == 20
+  assert cfg.session.output_dir == "runs/default"
 
 
-def test_config_invalid_provider():
+def test_config_with_evaluator():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    tpu={"cluster": "c", "zone": "z"},
+    evaluator={
+      "namespace": "custom-ns",
+      "job_template": "custom-template.yaml",
+      "repo": "user/repo",
+      "branch": "dev",
+      "poll_interval": 30,
+      "timeout": 1200,
+    },
+  )
+  assert cfg.evaluator.namespace == "custom-ns"
+  assert cfg.evaluator.repo == "user/repo"
+  assert cfg.evaluator.poll_interval == 30
+
+
+def test_config_with_session():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    tpu={"cluster": "c", "zone": "z"},
+    session={"max_iterations": 50, "output_dir": "runs/custom"},
+  )
+  assert cfg.session.max_iterations == 50
+  assert cfg.session.output_dir == "runs/custom"
+
+
+def test_session_config_defaults():
+  s = SessionConfig()
+  assert s.max_iterations == 20
+  assert s.output_dir == "runs/default"
+
+
+def test_config_no_evolution_or_llm_fields():
+  """Verify old fields (evolution, llm, logging) are not accepted."""
   with pytest.raises(ValueError):
     EvolveConfig(
       kernel={"name": "t", "template": "k.py", "reference": "r.py"},
       shapes=[{"M": 64}],
-      llm={"provider": "invalid_provider", "model": "m"},
-      tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "i"},
+      tpu={"cluster": "c", "zone": "z"},
+      evolution={"population_size": 25},
     )
-
-
-def test_config_with_kube_evaluator():
-  cfg = EvolveConfig(
-    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
-    shapes=[{"M": 64}],
-    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
-    tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
-    evaluator={
-      "type": "kube",
-      "namespace": "default",
-      "job_template": ".github/ci/kernel-eval-job.yaml",
-      "repo": "sii-xinglong/Glaucis",
-      "branch": "main",
-      "poll_interval": 15,
-      "timeout": 600,
-    },
-  )
-  assert cfg.evaluator.type.value == "kube"
-  assert cfg.evaluator.namespace == "default"
-  assert cfg.evaluator.poll_interval == 15
-
-
-def test_config_evaluator_defaults():
-  cfg = EvolveConfig(
-    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
-    shapes=[{"M": 64}],
-    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
-    tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
-  )
-  assert cfg.evaluator.type.value == "kube"
-  assert cfg.evaluator.poll_interval == 15
-  assert cfg.evaluator.timeout == 600

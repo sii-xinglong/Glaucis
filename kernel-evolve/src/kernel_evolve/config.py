@@ -1,6 +1,5 @@
 """YAML config parsing and validation with Pydantic."""
 
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -26,28 +25,7 @@ class CorrectnessConfig(BaseModel):
   atol: float = 1e-2
 
 
-class EvolutionConfig(BaseModel):
-  population_size: int = 25
-  num_islands: int = 3
-  max_generations: int = 50
-  stagnation_limit: int = 10
-  fitness: str = "speedup"
-  migration_interval: int = 5
-
-
-class LLMProvider(str, Enum):
-  anthropic = "anthropic"
-  google = "google"
-  openai = "openai"
-
-
-class EvaluatorType(str, Enum):
-  kube = "kube"
-  ci = "ci"
-
-
 class EvaluatorConfig(BaseModel):
-  type: EvaluatorType = EvaluatorType.kube
   namespace: str = "default"
   job_template: str = ".github/ci/kernel-eval-job.yaml"
   repo: str = ""
@@ -56,36 +34,25 @@ class EvaluatorConfig(BaseModel):
   timeout: int = 600
 
 
-class LLMConfig(BaseModel):
-  provider: LLMProvider
-  model: str
-  temperature: float = 0.7
-
-
 class TPUConfig(BaseModel):
   cluster: str
   zone: str
-  tpu_type: str
-  namespace: str = "default"
-  image: str
-  timeout: int = 300
 
 
-class LoggingConfig(BaseModel):
+class SessionConfig(BaseModel):
+  max_iterations: int = 20
   output_dir: str = "runs/default"
-  perf_log: bool = True
-  charts: bool = True
 
 
 class EvolveConfig(BaseModel):
+  model_config = {"extra": "forbid"}
+
   kernel: KernelConfig
   shapes: list[dict[str, Any]]
   correctness: CorrectnessConfig = Field(default_factory=CorrectnessConfig)
-  evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
-  llm: LLMConfig
-  tpu: TPUConfig
   evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
-  logging: LoggingConfig = Field(default_factory=LoggingConfig)
+  tpu: TPUConfig
+  session: SessionConfig = Field(default_factory=SessionConfig)
 
 
 def load_config(path: str | Path) -> EvolveConfig:

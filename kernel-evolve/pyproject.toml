@@ -7,21 +7,14 @@ name = "kernel-evolve"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-  "click>=8.0",
   "pyyaml>=6.0",
   "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.40"]
-google = ["google-genai>=1.0"]
-openai = ["openai>=1.0"]
 charts = ["matplotlib>=3.7"]
 profile = ["xprof"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
-
-[project.scripts]
-kernel-evolve = "kernel_evolve.cli:main"
 
 [tool.ruff]
 line-length = 120

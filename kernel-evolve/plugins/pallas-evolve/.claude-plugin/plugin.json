@@ -1,0 +1,11 @@
+{
+  "name": "pallas-evolve",
+  "description": "Interactive Pallas TPU kernel optimization via iterative eval-analyze-reflect loop on GKE TPU v7x",
+  "version": "0.1.0",
+  "author": {
+    "name": "sii-xinglong"
+  },
+  "repository": "https://github.com/sii-xinglong/Glaucis",
+  "license": "Apache-2.0",
+  "keywords": ["pallas", "tpu", "kernel", "optimization", "jax"]
+}
