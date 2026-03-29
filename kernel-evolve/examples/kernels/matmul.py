@@ -3,13 +3,13 @@
 import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
+from jax.experimental.pallas import tpu as pltpu
 
 
+# EVOLVE-BLOCK-START
 def matmul_kernel(x_ref, y_ref, o_ref):
-  # EVOLVE-BLOCK-START
   acc = jnp.dot(x_ref[...], y_ref[...], preferred_element_type=jnp.float32)
   o_ref[...] = acc.astype(o_ref.dtype)
-  # EVOLVE-BLOCK-END
 
 
 def optimized_compute(M=1024, N=1024, K=1024):
@@ -27,3 +27,4 @@ def optimized_compute(M=1024, N=1024, K=1024):
     out_specs=pl.BlockSpec((BLOCK_M, BLOCK_N), lambda i, j: (i, j)),
   )(x, y)
   return result
+# EVOLVE-BLOCK-END

@@ -94,6 +94,8 @@ class EvolutionEngine:
 
       if result.status != EvalStatus.SUCCESS:
         self._failed_attempts.append(f"{explanation}: {result.error[:80]}")
+        error_path = self._output_dir / "failed" / f"{variant.id}.log"
+        error_path.write_text(f"Status: {result.status.name}\nError: {result.error}\n")
 
     if self._config.logging.perf_log and gen_entries:
       self._perf_log.log_generation(self._generation, gen_entries, gen_best_id or "none", gen_best_fitness)
