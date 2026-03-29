@@ -1,16 +1,23 @@
-"""Reference BF16 GMM for correctness comparison (no FP8 quantization).
+"""Reference FP8 blockwise GMM for correctness comparison.
 
-Uses tokamax backend directly with bfloat16 precision.
-Provides reference_fn(M, K, N, G) that runs forward + backward,
-matching the optimized kernel's interface.
+Uses the same FP8 blockwise quantization as the optimized kernel template
+(baseline configuration). This ensures the correctness check verifies that
+optimized variants produce the same output as the unoptimized baseline,
+not that FP8 matches BF16 (which would require absurdly high atol).
 """
+
+import functools
 
 import jax
 import jax.numpy as jnp
 
+import qwix
+import qwix.pallas as qpl
+
 from tokamax._src.ops.ragged_dot import pallas_mosaic_tpu_kernel as tokamax_backend
 
 
+FP8_DTYPE = jnp.float8_e4m3fn
 DEFAULT_TILE_SIZE = 128
 
 
@@ -27,29 +34,136 @@ def _make_test_data(M, K, N, G, seed=42):
     return lhs, rhs, group_sizes
 
 
-def gmm_bf16(lhs, rhs, group_sizes):
-    """Reference GMM in BF16 using tokamax backend (no quantization)."""
-    return tokamax_backend.gmm(
+def _gmm_fwd_ref(lhs, rhs, group_sizes, qt_rule, tiling):
+    tile_size = qt_rule.tile_size
+    tiling = tuple(min(t, tile_size) for t in tiling)
+
+    lhs_bf16 = lhs
+    lhs = qpl.quantize(
+        lhs_bf16,
+        qt_rule.act_qtype,
+        channelwise_axes=[0],
+        tiled_axes={1: tile_size},
+        calibration_method=qt_rule.act_calibration_method,
+        scale_dtype=jnp.float32,
+    )
+    lhs_t = qpl.quantize(
+        lhs_bf16.swapaxes(0, 1),
+        qt_rule.act_qtype,
+        channelwise_axes=[0],
+        tiled_axes={1: tile_size},
+        calibration_method=qt_rule.act_calibration_method,
+        scale_dtype=jnp.float32,
+    )
+    rhs = qpl.quantize(
+        rhs,
+        qt_rule.weight_qtype,
+        channelwise_axes=[0],
+        tiled_axes={1: tile_size, 2: tile_size},
+        calibration_method=qt_rule.weight_calibration_method,
+        scale_dtype=jnp.float32,
+    )
+
+    out = tokamax_backend.gmm(
         lhs=lhs,
         rhs=rhs,
         group_sizes=group_sizes,
         precision=jax.lax.Precision.DEFAULT,
         out_dtype=jnp.float32,
-        tiling=(128, 128, 128),
+        tiling=tiling[:3],
+        group_offset=None,
         transpose_rhs=False,
         interpret=False,
     )
+    return out, (lhs, rhs, group_sizes, lhs_t)
+
+
+def _gmm_bwd_ref(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
+    lhs, rhs, group_sizes, lhs_t = residual
+    num_actual_groups = rhs.shape[0]
+    tile_size = qt_rule.tile_size
+    tiling = tuple(min(t, tile_size) for t in tiling)
+
+    dlhs_dout = qpl.quantize(
+        grad,
+        qt_rule.bwd_qtype,
+        channelwise_axes=[0],
+        tiled_axes={1: tile_size},
+        calibration_method=qt_rule.bwd_calibration_method,
+        scale_dtype=jnp.float32,
+    )
+    drhs_dout = qpl.quantize(
+        grad,
+        qt_rule.bwd_qtype,
+        channelwise_axes=[1],
+        tiled_axes={0: tile_size},
+        calibration_method=qt_rule.bwd_calibration_method,
+        scale_dtype=jnp.float32,
+    )
+
+    dlhs = tokamax_backend.gmm(
+        lhs=dlhs_dout,
+        rhs=rhs,
+        group_sizes=group_sizes,
+        precision=jax.lax.Precision.DEFAULT,
+        out_dtype=lhs_dtype,
+        tiling=tiling[3:6] if len(tiling) >= 6 else tiling[:3],
+        group_offset=None,
+        transpose_rhs=True,
+        interpret=False,
+    )
+
+    drhs = tokamax_backend.tgmm(
+        lhs=lhs_t,
+        rhs=drhs_dout,
+        group_sizes=group_sizes,
+        precision=jax.lax.Precision.DEFAULT,
+        out_dtype=rhs_dtype,
+        tiling=tiling[6:9] if len(tiling) >= 9 else tiling[:3],
+        group_offset=None,
+        num_actual_groups=num_actual_groups,
+        interpret=False,
+    )
+
+    return dlhs, drhs, None
+
+
+def gmm_fp8_blockwise_ref(lhs, rhs, group_sizes):
+    """Baseline FP8 blockwise GMM (unoptimized, same as template default)."""
+    tile_size = 128
+    tiling = (128, 128, 128) * 3
+
+    qt_rule = qwix.QtRule(
+        weight_qtype=FP8_DTYPE,
+        act_qtype=FP8_DTYPE,
+        bwd_qtype=FP8_DTYPE,
+        tile_size=tile_size,
+        weight_calibration_method="absmax",
+        act_calibration_method="absmax",
+        bwd_calibration_method="absmax",
+    )
+    fwd_bwd = lambda *a: _gmm_fwd_ref(*a)[0]
+    fwd_bwd = jax.custom_vjp(fwd_bwd, nondiff_argnums=(3, 4))
+    fwd_bwd.defvjp(
+        _gmm_fwd_ref,
+        functools.partial(_gmm_bwd_ref, lhs.dtype, rhs.dtype),
+    )
+    return fwd_bwd(lhs, rhs, group_sizes, qt_rule, tiling)
 
 
 def simple_compute(M=8192, K=2048, N=512, G=32):
-    """Forward-only BF16 GMM reference.
+    """Forward + backward FP8 blockwise GMM baseline.
 
-    Returns the loss scalar for correctness comparison.
-    Note: no backward pass because tokamax pallas_call does not
-    support automatic JVP differentiation (only custom_vjp works).
+    Returns the loss scalar. Uses the same FP8 configuration as the
+    template kernel's default (tile_size=128, absmax calibration).
     """
     lhs, rhs, group_sizes = _make_test_data(M, K, N, G)
-    return gmm_bf16(lhs, rhs, group_sizes).sum()
+
+    def loss_fn(lhs, rhs):
+        return gmm_fp8_blockwise_ref(lhs, rhs, group_sizes).sum()
+
+    loss, _ = jax.value_and_grad(loss_fn, argnums=(0, 1))(lhs, rhs)
+    return loss
 
 
 def reference_fn(**kwargs):

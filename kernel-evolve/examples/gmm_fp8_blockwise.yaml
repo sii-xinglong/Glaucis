@@ -15,11 +15,10 @@ shapes:
 
 correctness:
   method: "allclose"
-  # Very high tolerance: FP8 vs BF16 loss scalar (sum over M*N elements)
-  # accumulates per-element quantization error. Gate/Up: 8192*512=4M elements,
-  # Down: 8192*2048=16M elements. This is a sanity check only.
-  rtol: 0.5
-  atol: 1.0e+7
+  # Both kernel and reference use the same FP8 baseline config, so max_diff
+  # should be ~0. Small tolerance for floating point non-determinism.
+  rtol: 1e-2
+  atol: 1.0
 
 evaluator:
   namespace: "default"
