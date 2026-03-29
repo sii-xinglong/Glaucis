@@ -23,7 +23,7 @@ def test_load_config_from_yaml(example_config_path):
   assert cfg.evolution.population_size == 25
   assert cfg.evolution.num_islands == 3
   assert cfg.llm.provider == "anthropic"
-  assert cfg.tpu.tpu_type == "v4-8"
+  assert cfg.tpu.tpu_type == "v7x"
   assert cfg.logging.perf_log is True
 
 
@@ -49,3 +49,36 @@ def test_config_invalid_provider():
       llm={"provider": "invalid_provider", "model": "m"},
       tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "i"},
     )
+
+
+def test_config_with_kube_evaluator():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
+    tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
+    evaluator={
+      "type": "kube",
+      "namespace": "default",
+      "job_template": ".github/ci/kernel-eval-job.yaml",
+      "repo": "sii-xinglong/Glaucis",
+      "branch": "main",
+      "poll_interval": 15,
+      "timeout": 600,
+    },
+  )
+  assert cfg.evaluator.type.value == "kube"
+  assert cfg.evaluator.namespace == "default"
+  assert cfg.evaluator.poll_interval == 15
+
+
+def test_config_evaluator_defaults():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    llm={"provider": "anthropic", "model": "claude-opus-4-6"},
+    tpu={"cluster": "c", "zone": "z", "tpu_type": "v4-8", "image": "img"},
+  )
+  assert cfg.evaluator.type.value == "kube"
+  assert cfg.evaluator.poll_interval == 15
+  assert cfg.evaluator.timeout == 600

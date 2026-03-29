@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import textwrap
 
 DEFAULT_START_MARKER = "# EVOLVE-BLOCK-START"
 DEFAULT_END_MARKER = "# EVOLVE-BLOCK-END"
@@ -25,7 +26,8 @@ def extract_evolve_block(
     raise ValueError(f"Could not find start marker: {start_marker}")
   if end_idx is None:
     raise ValueError(f"Could not find end marker: {end_marker}")
-  return "\n".join(lines[start_idx + 1 : end_idx])
+  block = "\n".join(lines[start_idx + 1 : end_idx])
+  return textwrap.dedent(block)
 
 
 def inject_evolve_block(
@@ -48,8 +50,34 @@ def inject_evolve_block(
     raise ValueError(f"Could not find end marker: {end_marker}")
   before = lines[: start_idx + 1]
   after = lines[end_idx:]
+
+  # Detect target indentation from the start marker line
+  marker_line = lines[start_idx]
+  target_indent = marker_line[: len(marker_line) - len(marker_line.lstrip())]
+
+  # Find the minimum indentation in the new block (to detect the base level)
   new_lines = new_block.split("\n")
-  return "\n".join(before + new_lines + after)
+  min_indent = None
+  for line in new_lines:
+    stripped = line.lstrip()
+    if stripped:
+      line_indent = len(line) - len(stripped)
+      if min_indent is None or line_indent < min_indent:
+        min_indent = line_indent
+  if min_indent is None:
+    min_indent = 0
+
+  # Re-indent: strip the detected base indent, then prepend the target indent
+  reindented = []
+  for line in new_lines:
+    stripped = line.lstrip()
+    if not stripped:
+      reindented.append("")
+    else:
+      line_indent = len(line) - len(stripped)
+      relative_indent = " " * (line_indent - min_indent)
+      reindented.append(target_indent + relative_indent + stripped)
+  return "\n".join(before + reindented + after)
 
 
 def validate_syntax(code: str) -> bool:

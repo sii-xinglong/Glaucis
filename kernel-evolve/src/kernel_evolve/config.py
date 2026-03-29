@@ -41,6 +41,21 @@ class LLMProvider(str, Enum):
   openai = "openai"
 
 
+class EvaluatorType(str, Enum):
+  kube = "kube"
+  ci = "ci"
+
+
+class EvaluatorConfig(BaseModel):
+  type: EvaluatorType = EvaluatorType.kube
+  namespace: str = "default"
+  job_template: str = ".github/ci/kernel-eval-job.yaml"
+  repo: str = ""
+  branch: str = "main"
+  poll_interval: int = 15
+  timeout: int = 600
+
+
 class LLMConfig(BaseModel):
   provider: LLMProvider
   model: str
@@ -69,6 +84,7 @@ class EvolveConfig(BaseModel):
   evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
   llm: LLMConfig
   tpu: TPUConfig
+  evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
   logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 

@@ -33,8 +33,9 @@ def run(config, resume, dry_run):
     click.echo("Dry run complete. Config is valid.")
     return
 
-  template_path = Path(cfg.kernel.template)
-  reference_path = Path(cfg.kernel.reference)
+  config_dir = Path(config).resolve().parent
+  template_path = config_dir / cfg.kernel.template
+  reference_path = config_dir / cfg.kernel.reference
 
   if not template_path.exists():
     click.echo(f"Error: template file not found: {template_path}", err=True)
@@ -50,10 +51,33 @@ def run(config, resume, dry_run):
 
   provider = create_provider(cfg.llm.provider.value, cfg.llm.model, cfg.llm.temperature)
 
-  from kernel_evolve.ci_dispatcher import CIConfig, CIDispatcher
+  if cfg.evaluator.type.value == "ci":
+    from kernel_evolve.ci_dispatcher import CIConfig, CIDispatcher
 
-  ci_config = CIConfig(repo=cfg.tpu.cluster, workflow="kernel-eval.yaml")
-  evaluator = CIDispatcher(ci_config)
+    ci_config = CIConfig(repo=cfg.evaluator.repo, workflow="kernel-eval.yaml")
+    evaluator = CIDispatcher(ci_config)
+  else:
+    from kernel_evolve.kube_evaluator import KubeConfig, KubeEvaluator
+
+    # Resolve job_template relative to repo root if not absolute
+    job_template_path = Path(cfg.evaluator.job_template)
+    if not job_template_path.is_absolute():
+      repo_root = config_dir
+      while repo_root != repo_root.parent:
+        if (repo_root / ".git").exists():
+          break
+        repo_root = repo_root.parent
+      job_template_path = repo_root / cfg.evaluator.job_template
+
+    kube_config = KubeConfig(
+      namespace=cfg.evaluator.namespace,
+      job_template=str(job_template_path),
+      repo=cfg.evaluator.repo,
+      branch=cfg.evaluator.branch,
+      poll_interval=cfg.evaluator.poll_interval,
+      timeout=cfg.evaluator.timeout,
+    )
+    evaluator = KubeEvaluator(kube_config)
 
   from kernel_evolve.engine import EvolutionEngine
 
