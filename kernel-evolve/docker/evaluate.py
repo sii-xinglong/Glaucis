@@ -153,7 +153,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
     trace_data = json.loads(tool_data_result)
     events = trace_data.get("traceEvents", [])
 
-    # Dump all device/process names for diagnostics (collect all names per pid)
+    # Collect process names per pid for diagnostics
     process_names: dict[int, list[str]] = {}
     for event in events:
       if "args" in event and "name" in event["args"]:
@@ -163,8 +163,6 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
         name_val = event["args"]["name"]
         if name_val not in process_names[pid_val]:
           process_names[pid_val].append(name_val)
-    print(f"Trace processes: {process_names}", file=sys.stderr)
-    print(f"Total trace events: {len(events)}", file=sys.stderr)
 
     # Find the pid for TPU device — try /device:TPU:0 first, then any TPU device
     pid = None
@@ -173,19 +171,17 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
         pid = event.get("pid")
         break
     if pid is None:
-      # Fallback: find any /device:TPU:* process
       for event in events:
         if "args" in event:
           name = event["args"].get("name", "")
           if name.startswith("/device:TPU:"):
             pid = event.get("pid")
-            print(f"Using fallback TPU device: {name} (pid={pid})", file=sys.stderr)
             break
 
     if pid is None:
       return {"ok": False, "error": f"No TPU device in trace. Processes: {process_names}"}
 
-    # Collect TPU events and computation events (try multiple patterns)
+    # Collect TPU events and computation events (multiple name patterns)
     events_for_tpu = []
     computation_events = []
     all_event_names = set()
@@ -202,40 +198,17 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
         if "dur" in event:
           computation_events.append(event)
 
-    print(
-      f"TPU event names (sample): {sorted(all_event_names)[:30]}",
-      file=sys.stderr,
-    )
-    print(
-      f"Computation events found: {len(computation_events)}",
-      file=sys.stderr,
-    )
-
-    # Check for SyncWait/idle events across ALL pids
-    sync_events_global = []
+    # Count SyncWait/idle events across all pids
+    sync_events_count = 0
     for event in events:
       name = event.get("name") or ""
       if "SyncWait" in name or "idle" in name.lower():
-        sync_events_global.append(
-          (event.get("pid"), name, event.get("dur", 0))
-        )
-    print(
-      f"SyncWait/idle events (all pids): {len(sync_events_global)}",
-      file=sys.stderr,
-    )
-    if sync_events_global:
-      print(
-        f"  Sample: {sync_events_global[:5]}", file=sys.stderr,
-      )
+        sync_events_count += 1
 
     if len(computation_events) < 2:
       # Last resort: use any duration event on TPU as computation marker
       dur_events = [e for e in events_for_tpu if "dur" in e and e["dur"] > 0]
       if len(dur_events) >= 2:
-        print(
-          f"Fallback: using {len(dur_events)} duration events as computation markers",
-          file=sys.stderr,
-        )
         computation_events = dur_events
       else:
         return {
@@ -274,7 +247,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       "total_events": len(events),
       "tpu_events": len(events_for_tpu),
       "computation_events": len(computation_events),
-      "sync_wait_events": len(sync_events_global),
+      "sync_wait_events": sync_events_count,
       "event_names_sample": sorted(all_event_names)[:30],
       "window_us": total_time,
       "sync_wait_us": sync_wait_total,
@@ -336,10 +309,17 @@ def main():
     compute_ratio = profile_result["compute_ratio"]
     memory_transfer_ratio = profile_result["memory_transfer_ratio"]
     profile_diag = profile_result.get("diagnostics", {})
-    print(f"Profile: compute_ratio={compute_ratio}, memory_transfer_ratio={memory_transfer_ratio}", file=sys.stderr)
+    print(
+      f"Profile: compute_ratio={compute_ratio}, "
+      f"memory_transfer_ratio={memory_transfer_ratio}",
+      file=sys.stderr,
+    )
   else:
     profile_diag = {"error": profile_result.get("error", "unknown")}
-    print(f"Profile skipped: {profile_result.get('error', 'unknown')}", file=sys.stderr)
+    print(
+      f"Profile skipped: {profile_result.get('error', 'unknown')}",
+      file=sys.stderr,
+    )
 
   result = {
     "status": "SUCCESS",
