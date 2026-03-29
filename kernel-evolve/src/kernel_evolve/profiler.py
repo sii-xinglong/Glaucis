@@ -32,44 +32,58 @@ def analyze_trace(xplane_path: str) -> dict[str, float] | None:
   trace_data = json.loads(tool_data_result)
   events = trace_data.get("traceEvents", [])
 
-  # Find the pid for /device:TPU:0
+  # Find the pid for TPU device — try /device:TPU:0 first, then any TPU
   pid = None
   for event in events:
     if "args" in event and event["args"].get("name") == "/device:TPU:0":
       pid = event.get("pid")
       break
+  if pid is None:
+    for event in events:
+      if "args" in event:
+        name = event["args"].get("name", "")
+        if name.startswith("/device:TPU:"):
+          pid = event.get("pid")
+          break
 
   if pid is None:
     return None
 
-  # Collect TPU:0 events and jit_computation events
-  events_for_tpu_0 = []
-  jit_computation_events = []
+  # Collect TPU events and computation events (multiple name patterns)
+  events_for_tpu = []
+  computation_events = []
   for event in events:
     if event.get("pid") != pid:
       continue
-    events_for_tpu_0.append(event)
+    events_for_tpu.append(event)
     name = event.get("name") or ""
-    if "jit_computation" in name:
-      jit_computation_events.append(event)
+    if ("jit_computation" in name or "jit(" in name
+        or "pallas" in name.lower()):
+      if "dur" in event:
+        computation_events.append(event)
 
-  if len(jit_computation_events) < 2:
-    return None
+  if len(computation_events) < 2:
+    # Fallback: use any duration event on TPU
+    dur_events = [e for e in events_for_tpu if "dur" in e and e["dur"] > 0]
+    if len(dur_events) >= 2:
+      computation_events = dur_events
+    else:
+      return None
 
   # Focus on the last iteration window
-  start_last = jit_computation_events[-2]["ts"] + jit_computation_events[-2]["dur"]
-  end_last = jit_computation_events[-1]["ts"] + jit_computation_events[-1]["dur"]
+  start_last = computation_events[-2]["ts"] + computation_events[-2]["dur"]
+  end_last = computation_events[-1]["ts"] + computation_events[-1]["dur"]
 
-  # Sum SyncWait durations within the window
+  # Sum SyncWait/idle durations within the window
   sync_wait_total = 0
-  for event in events_for_tpu_0:
+  for event in events_for_tpu:
     if "dur" not in event:
       continue
     evt_start = event["ts"]
     evt_end = evt_start + event["dur"]
     if evt_start >= start_last and evt_end <= end_last:
       name = event.get("name") or ""
-      if "SyncWait" in name:
+      if "SyncWait" in name or "idle" in name.lower():
         sync_wait_total += event["dur"]
 
   total_time = end_last - start_last
