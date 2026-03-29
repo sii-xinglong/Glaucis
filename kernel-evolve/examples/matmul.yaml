@@ -15,20 +15,7 @@ correctness:
   rtol: 1e-2
   atol: 1.0
 
-evolution:
-  population_size: 25
-  num_islands: 3
-  max_generations: 50
-  stagnation_limit: 10
-  fitness: "speedup"
-
-llm:
-  provider: "anthropic"
-  model: "claude-opus-4-6"
-  temperature: 0.7
-
 evaluator:
-  type: "kube"
   namespace: "default"
   job_template: ".github/ci/kernel-eval-job.yaml"
   repo: "sii-xinglong/Glaucis"
@@ -39,12 +26,7 @@ evaluator:
 tpu:
   cluster: "tpu7x-cluster"
   zone: "us-central1"
-  tpu_type: "v7x"
-  namespace: "default"
-  image: "python:3.12"
-  timeout: 300
 
-logging:
-  output_dir: "runs/matmul_001"
-  perf_log: true
-  charts: true
+session:
+  max_iterations: 20
+  output_dir: "runs/matmul"
