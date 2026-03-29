@@ -268,10 +268,22 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       return {"ok": False, "error": "Invalid trace timing (total_time <= 0)"}
 
     ratio = sync_wait_total / total_time
+    diag = {
+      "process_names": {str(k): v for k, v in process_names.items()},
+      "selected_pid": pid,
+      "total_events": len(events),
+      "tpu_events": len(events_for_tpu),
+      "computation_events": len(computation_events),
+      "sync_wait_events": len(sync_events_global),
+      "event_names_sample": sorted(all_event_names)[:30],
+      "window_us": total_time,
+      "sync_wait_us": sync_wait_total,
+    }
     return {
       "ok": True,
       "compute_ratio": 1.0 - ratio,
       "memory_transfer_ratio": ratio,
+      "diagnostics": diag,
     }
   except Exception:
     return {"ok": False, "error": f"Profile error: {traceback.format_exc()}"}
@@ -319,11 +331,14 @@ def main():
   profile_result = stage_profile(compile_result["globals"], request["shapes"])
   compute_ratio = None
   memory_transfer_ratio = None
+  profile_diag = {}
   if profile_result["ok"]:
     compute_ratio = profile_result["compute_ratio"]
     memory_transfer_ratio = profile_result["memory_transfer_ratio"]
+    profile_diag = profile_result.get("diagnostics", {})
     print(f"Profile: compute_ratio={compute_ratio}, memory_transfer_ratio={memory_transfer_ratio}", file=sys.stderr)
   else:
+    profile_diag = {"error": profile_result.get("error", "unknown")}
     print(f"Profile skipped: {profile_result.get('error', 'unknown')}", file=sys.stderr)
 
   result = {
@@ -334,6 +349,7 @@ def main():
     "flops": 0.0,
     "compute_ratio": compute_ratio,
     "memory_transfer_ratio": memory_transfer_ratio,
+    "metadata": {"profile_diagnostics": profile_diag},
   }
   print(f"EVAL_RESULT:{json.dumps(result)}")
 

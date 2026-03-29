@@ -86,6 +86,25 @@ def main():
       print(f"Memory Transfer Ratio:  {result.memory_transfer_ratio:.4f}")
       print(f"MAP-Elites Bucket:      {bucket}")
       print()
+
+      # Display trace diagnostics if available
+      diag = result.metadata.get("profile_diagnostics", {})
+      if diag:
+        print("-" * 60)
+        print("TRACE DIAGNOSTICS")
+        print("-" * 60)
+        print(f"Process names:         {diag.get('process_names', {})}")
+        print(f"Selected PID:          {diag.get('selected_pid')}")
+        print(f"Total trace events:    {diag.get('total_events')}")
+        print(f"TPU events:            {diag.get('tpu_events')}")
+        print(f"Computation events:    {diag.get('computation_events')}")
+        print(f"SyncWait events:       {diag.get('sync_wait_events')}")
+        print(f"Window (us):           {diag.get('window_us')}")
+        print(f"SyncWait total (us):   {diag.get('sync_wait_us')}")
+        event_names = diag.get("event_names_sample", [])
+        print(f"Event names:           {event_names}")
+        print()
+
       print("PROFILING: PASS - compute_ratio and memory_transfer_ratio present")
     else:
       print("Compute Ratio:          None")
