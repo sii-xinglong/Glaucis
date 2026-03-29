@@ -177,10 +177,10 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
         return (m_tid, k_i)
 
     def lhs_sc_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
-        del n_i
+        del n_i, k_i
         m_tid = group_metadata_ref[1, tile_i]  # global tile index
-        # Scale shape [M, K//128]; block (tm, 1) since tk/128 = 1
-        return (m_tid, k_i)
+        # Load full scale row; kernel indexes by k_i via pl.ds.
+        return (m_tid, 0)
 
     def rhs_qv_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del group_offsets_ref
@@ -188,10 +188,10 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
         return (g_id, k_i, n_i)
 
     def rhs_sc_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
-        del group_offsets_ref
+        del n_i, k_i, group_offsets_ref
         g_id = group_metadata_ref[0, tile_i]
-        # Scale shape [G, K//128, N//128]; block (1, 1, 1)
-        return (g_id, k_i, n_i)
+        # Load full scale matrix for this group; kernel indexes by k_i, n_i.
+        return (g_id, 0, 0)
 
     def out_index_map(n_i, tile_i, k_i, group_metadata_ref, group_offsets_ref):
         del k_i
@@ -200,9 +200,9 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
 
     # -- 5. BlockSpecs -----------------------------------------------------
     lhs_qv_spec = pl.BlockSpec((tm, tk), lhs_qv_index_map)
-    lhs_sc_spec = pl.BlockSpec((tm, 1), lhs_sc_index_map)
+    lhs_sc_spec = pl.BlockSpec((tm, tiles_k), lhs_sc_index_map)
     rhs_qv_spec = pl.BlockSpec((1, tk, tn), rhs_qv_index_map)
-    rhs_sc_spec = pl.BlockSpec((1, 1, 1), rhs_sc_index_map)
+    rhs_sc_spec = pl.BlockSpec((1, tiles_k, tiles_n), rhs_sc_index_map)
     out_spec = pl.BlockSpec((tm, tn), out_index_map)
 
     # -- 6. Kernel function ------------------------------------------------
@@ -217,6 +217,7 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
         acc_scratch,
     ):
         # EVOLVE-BLOCK-START
+        n_i = pl.program_id(0)
         grid_id = pl.program_id(1)
         k_i = pl.program_id(2)
 
@@ -237,10 +238,10 @@ def optimized_compute(M=2048, K=1024, N=1024, num_groups=4):
         )
 
         # Apply blockwise scales.
-        # lhs_sc_ref: [tm, 1] f32 scale per row per K-block.
-        # rhs_sc_ref: [1, 1, 1] f32 scale for this (group, k-block, n-block).
-        lhs_scale = lhs_sc_ref[...].astype(jnp.float32)     # [tm, 1]
-        rhs_scale = rhs_sc_ref[0, 0, 0].astype(jnp.float32) # scalar
+        # lhs_sc_ref: [tm, tiles_k] f32 — full scale row, index by k_i.
+        # rhs_sc_ref: [1, tiles_k, tiles_n] f32 — full scale matrix, index by k_i, n_i.
+        lhs_scale = lhs_sc_ref[:, pl.ds(k_i, 1)].astype(jnp.float32)  # [tm, 1]
+        rhs_scale = rhs_sc_ref[0, k_i, n_i].astype(jnp.float32)       # scalar
 
         result = result * lhs_scale * rhs_scale
 
