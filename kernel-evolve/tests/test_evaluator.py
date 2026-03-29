@@ -32,6 +32,31 @@ def test_eval_result_success():
   assert r.latency_ms == 1.5
 
 
+def test_eval_result_success_with_profile():
+  r = EvalResult.success(latency_ms=1.5, speedup=2.3, flops=1e12, compute_ratio=0.85, memory_transfer_ratio=0.15)
+  assert r.compute_ratio == 0.85
+  assert r.memory_transfer_ratio == 0.15
+  d = r.to_dict()
+  assert d["compute_ratio"] == 0.85
+  assert d["memory_transfer_ratio"] == 0.15
+
+
+def test_eval_result_success_without_profile():
+  r = EvalResult.success(latency_ms=1.5, speedup=2.3)
+  assert r.compute_ratio is None
+  assert r.memory_transfer_ratio is None
+  d = r.to_dict()
+  assert d["compute_ratio"] is None
+
+
+def test_eval_result_roundtrip_with_profile():
+  r = EvalResult.success(latency_ms=1.0, speedup=1.5, compute_ratio=0.7, memory_transfer_ratio=0.3)
+  d = r.to_dict()
+  restored = EvalResult.from_dict(d)
+  assert restored.compute_ratio == 0.7
+  assert restored.memory_transfer_ratio == 0.3
+
+
 def test_eval_request_serialization():
   req = EvalRequest(
     variant_id="v001",

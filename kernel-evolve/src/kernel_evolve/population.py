@@ -9,6 +9,19 @@ from pathlib import Path
 from typing import Any
 
 
+def ratio_to_compute_profile(compute_ratio: float | None) -> str:
+  """Map a compute-to-memory ratio to a profile bucket."""
+  if compute_ratio is None:
+    return "medium"
+  if compute_ratio < 0.25:
+    return "very_low"
+  if compute_ratio < 0.50:
+    return "low"
+  if compute_ratio < 0.75:
+    return "medium"
+  return "high"
+
+
 @dataclass
 class BehaviorDescriptor:
   """Behavioral descriptors that define a cell in the MAP-Elites grid."""
@@ -16,9 +29,10 @@ class BehaviorDescriptor:
   block_size: int = 128
   pipeline_stages: int = 1
   memory_strategy: str = "scratch"
+  compute_profile: str = "medium"
 
   def cell_key(self) -> tuple:
-    return (self.block_size, self.pipeline_stages, self.memory_strategy)
+    return (self.block_size, self.pipeline_stages, self.memory_strategy, self.compute_profile)
 
 
 @dataclass
@@ -42,6 +56,7 @@ class Archive:
       "block_size": [64, 128, 256, 512],
       "pipeline_stages": [1, 2, 3, 4],
       "memory_strategy": ["scratch", "hbm", "rmw"],
+      "compute_profile": ["very_low", "low", "medium", "high"],
     }
     self._grid: dict[tuple, Variant] = {}
 

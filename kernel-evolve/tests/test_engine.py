@@ -85,3 +85,23 @@ async def test_engine_stagnation_detection(minimal_config, mock_provider, mock_e
   for _ in range(3):
     await engine.run_generation()
   assert engine._stagnation_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_engine_sets_compute_profile(minimal_config, mock_provider, tmp_path):
+  minimal_config.logging.output_dir = str(tmp_path / "run")
+  eval_result = EvalResult.success(latency_ms=1.0, speedup=2.0, compute_ratio=0.9, memory_transfer_ratio=0.1)
+  mock_evaluator = AsyncMock()
+  mock_evaluator.evaluate.return_value = eval_result
+
+  engine = EvolutionEngine(
+    config=minimal_config,
+    provider=mock_provider,
+    evaluator=mock_evaluator,
+    template_code="# EVOLVE-BLOCK-START\npass\n# EVOLVE-BLOCK-END",
+    reference_code="def ref(): pass",
+  )
+  await engine.run_generation()
+  best = engine.best
+  assert best is not None
+  assert best.descriptor.compute_profile == "high"
