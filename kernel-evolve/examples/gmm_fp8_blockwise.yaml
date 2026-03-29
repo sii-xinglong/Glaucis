@@ -1,0 +1,37 @@
+kernel:
+  name: "gmm_fp8_blockwise"
+  template: "kernels/gmm_fp8_blockwise.py"
+  reference: "kernels/gmm_fp8_blockwise_ref.py"
+  evolve_markers:
+    start: "# EVOLVE-BLOCK-START"
+    end: "# EVOLVE-BLOCK-END"
+
+# AL model per-EP-shard dimensions:
+#   Gate/Up: lhs [8192, 2048] @ rhs [32, 2048, 512]
+#   Down:    lhs [8192, 512]  @ rhs [32, 512, 2048]
+shapes:
+  - { M: 8192, K: 2048, N: 512, G: 32 }   # Gate/Up projection
+  - { M: 8192, K: 512, N: 2048, G: 32 }   # Down projection
+
+correctness:
+  method: "allclose"
+  # High tolerance: FP8 vs BF16 loss scalar accumulates quantization error
+  # across M*N elements. This is a sanity check, not a precision test.
+  rtol: 0.5
+  atol: 5000.0
+
+evaluator:
+  namespace: "default"
+  job_template: ".github/ci/kernel-eval-gmm-job.yaml"
+  repo: "sii-xinglong/Glaucis"
+  branch: "main"
+  poll_interval: 15
+  timeout: 600
+
+tpu:
+  cluster: "tpu7x-cluster"
+  zone: "us-central1"
+
+session:
+  max_iterations: 20
+  output_dir: "runs/gmm_fp8_blockwise"

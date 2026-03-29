@@ -1,0 +1,75 @@
+# Kernel Evaluation K8s Job Template — GMM FP8 Blockwise
+# Extends kernel-eval-job.yaml with qwix + tokamax dependencies
+# Rendered by envsubst with: $JOB_NAME $BRANCH $REPO $VARIANT_ID
+# TPU resources are requested to schedule on TPU nodes
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: default
+  labels:
+    app: kernel-eval
+    variant-id: "${VARIANT_ID}"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: kernel-eval
+        job-name: ${JOB_NAME}
+    spec:
+      containers:
+      - name: kernel-eval
+        image: python:3.12
+        command:
+        - bash
+        - -c
+        - |
+          set -ex
+          pip install uv
+          uv pip install --system --prerelease=allow --no-cache \
+            jax jaxlib libtpu numpy xprof \
+            qwix \
+            "tokamax @ git+https://github.com/primatrix/tokamax" \
+            --extra-index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+          git clone --depth=1 --branch="$BRANCH" \
+            "https://github.com/$REPO.git" /workspace 2>/dev/null || \
+          (git clone "https://github.com/$REPO.git" /workspace && \
+           cd /workspace && git checkout "$BRANCH")
+          cd /workspace
+          python kernel-evolve/docker/evaluate.py --eval-payload "$EVAL_PAYLOAD"
+        env:
+        - name: BRANCH
+          value: "${BRANCH}"
+        - name: REPO
+          value: "${REPO}"
+        - name: JAX_PLATFORMS
+          value: "tpu,cpu"
+        - name: ENABLE_PJRT_COMPATIBILITY
+          value: "true"
+        - name: EVAL_PAYLOAD
+          valueFrom:
+            configMapKeyRef:
+              name: ${JOB_NAME}-payload
+              key: payload
+        resources:
+          limits:
+            google.com/tpu: "4"
+          requests:
+            google.com/tpu: "4"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu7x
+        cloud.google.com/gke-tpu-topology: 2x2x1
+      restartPolicy: Never
