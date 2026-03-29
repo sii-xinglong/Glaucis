@@ -42,17 +42,14 @@ def gmm_bf16(lhs, rhs, group_sizes):
 
 
 def simple_compute(M=8192, K=2048, N=512, G=32):
-    """Forward + backward BF16 GMM reference.
+    """Forward-only BF16 GMM reference.
 
-    Returns the loss scalar, matching optimized_compute interface.
+    Returns the loss scalar for correctness comparison.
+    Note: no backward pass because tokamax pallas_call does not
+    support automatic JVP differentiation (only custom_vjp works).
     """
     lhs, rhs, group_sizes = _make_test_data(M, K, N, G)
-
-    def loss_fn(lhs, rhs):
-        return gmm_bf16(lhs, rhs, group_sizes).sum()
-
-    loss, _ = jax.value_and_grad(loss_fn, argnums=(0, 1))(lhs, rhs)
-    return loss
+    return gmm_bf16(lhs, rhs, group_sizes).sum()
 
 
 def reference_fn(**kwargs):
