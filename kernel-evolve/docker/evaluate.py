@@ -153,12 +153,18 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
     trace_data = json.loads(tool_data_result)
     events = trace_data.get("traceEvents", [])
 
-    # Dump all device/process names for diagnostics
-    process_names = {}
+    # Dump all device/process names for diagnostics (collect all names per pid)
+    process_names: dict[int, list[str]] = {}
     for event in events:
       if "args" in event and "name" in event["args"]:
-        process_names[event.get("pid")] = event["args"]["name"]
+        pid_val = event.get("pid")
+        if pid_val not in process_names:
+          process_names[pid_val] = []
+        name_val = event["args"]["name"]
+        if name_val not in process_names[pid_val]:
+          process_names[pid_val].append(name_val)
     print(f"Trace processes: {process_names}", file=sys.stderr)
+    print(f"Total trace events: {len(events)}", file=sys.stderr)
 
     # Find the pid for TPU device — try /device:TPU:0 first, then any TPU device
     pid = None
@@ -197,13 +203,30 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
           computation_events.append(event)
 
     print(
-      f"TPU event names (sample): {sorted(all_event_names)[:20]}",
+      f"TPU event names (sample): {sorted(all_event_names)[:30]}",
       file=sys.stderr,
     )
     print(
       f"Computation events found: {len(computation_events)}",
       file=sys.stderr,
     )
+
+    # Check for SyncWait/idle events across ALL pids
+    sync_events_global = []
+    for event in events:
+      name = event.get("name") or ""
+      if "SyncWait" in name or "idle" in name.lower():
+        sync_events_global.append(
+          (event.get("pid"), name, event.get("dur", 0))
+        )
+    print(
+      f"SyncWait/idle events (all pids): {len(sync_events_global)}",
+      file=sys.stderr,
+    )
+    if sync_events_global:
+      print(
+        f"  Sample: {sync_events_global[:5]}", file=sys.stderr,
+      )
 
     if len(computation_events) < 2:
       # Last resort: use any duration event on TPU as computation marker
