@@ -16,6 +16,21 @@ def decode_request(b64_payload: str) -> dict[str, Any]:
   return json.loads(base64.b64decode(b64_payload).decode())
 
 
+def _resolve_compute_fn(
+    exec_globals: dict[str, Any],
+    *,
+    allow_reference: bool = False,
+):
+  names = ["optimized_compute", "kernel_fn"]
+  if allow_reference:
+    names.extend(["simple_compute", "reference_fn"])
+  for name in names:
+    fn = exec_globals.get(name)
+    if fn is not None:
+      return fn
+  return None
+
+
 def _has_tpu() -> bool:
   try:
     import jax
@@ -49,8 +64,8 @@ def stage_correctness(kernel_code, reference_code, shapes, rtol, atol, exec_glob
   try:
     ref_globals = {}
     exec(reference_code, ref_globals)
-    kernel_fn = exec_globals.get("optimized_compute") or exec_globals.get("kernel_fn")
-    ref_fn = ref_globals.get("simple_compute") or ref_globals.get("reference_fn")
+    kernel_fn = _resolve_compute_fn(exec_globals)
+    ref_fn = _resolve_compute_fn(ref_globals, allow_reference=True)
     if kernel_fn is None or ref_fn is None:
       return {"ok": False, "error": "Could not find kernel_fn/reference_fn", "max_diff": 0.0}
     for shape in shapes:
@@ -70,9 +85,9 @@ def stage_correctness(kernel_code, reference_code, shapes, rtol, atol, exec_glob
 
 def stage_performance(exec_globals, shapes, warmup=10, iters=50):
   try:
-    kernel_fn = exec_globals.get("optimized_compute") or exec_globals.get("kernel_fn")
+    kernel_fn = _resolve_compute_fn(exec_globals, allow_reference=True)
     if kernel_fn is None:
-      return {"ok": False, "error": "No kernel_fn found"}
+      return {"ok": False, "error": "No compute function found"}
     shape = shapes[0]
     for _ in range(warmup):
       out = kernel_fn(**shape)
@@ -329,7 +344,11 @@ def main():
     "flops": 0.0,
     "compute_ratio": compute_ratio,
     "memory_transfer_ratio": memory_transfer_ratio,
-    "metadata": {"profile_diagnostics": profile_diag},
+    "metadata": {
+      "reference_latency_ms": ref_latency,
+      "reference_perf_ok": ref_perf.get("ok", False),
+      "profile_diagnostics": profile_diag,
+    },
   }
   print(f"EVAL_RESULT:{json.dumps(result)}")
 
