@@ -221,6 +221,26 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
 
 For each round from 1 to `max_iterations`:
 
+### Phase 0: PROFILE (Generate Profile Brief)
+
+Before generating variants, read the previous round's best variant's raw profiling artifacts and generate a profile brief for sub-agents.
+
+1. **Identify the profile source**:
+   - Round 1: Use `{run_dir}/baseline/` (from Step 10)
+   - Round 2+: Read `lineages.json`, find the lineage with the highest `best_speedup`, use its `best_kernel` directory (the directory containing the kernel file, which should also contain `eval_result.json`, `llo_final.txt`, etc.)
+
+2. **Check artifact availability**:
+   - `eval_result.json` MUST exist (it always does after submit)
+   - `llo_final.txt` — if missing, note "LLO not available" in the brief
+   - `hlo_post_opt.txt` — if missing, note "HLO not available" in the brief
+   - `trace_events.json` — optional, used for compute/sync gap analysis
+
+3. **Generate profile brief**: Follow the **Profile Brief Generation** procedure above. Write the output to `{run_dir}/iteration_{N}/profile_brief.md`.
+
+4. **For Round 2+, generate delta table**: Read `{run_dir}/baseline/eval_result.json` and compare with the current best variant's metrics. Include the delta table in the profile brief.
+
+5. **Read the profile brief into a variable** for passing to sub-agents in Phase 1.
+
 ### Phase 1: THINK (Batch Variant Generation)
 
 **CRITICAL RULE**: Each variant MUST explore a genuinely different TECHNICAL DIRECTION. Changing block sizes from 128 to 256 is NOT a different direction — that is a parameter variation. Different directions means fundamentally different optimization APPROACHES:
