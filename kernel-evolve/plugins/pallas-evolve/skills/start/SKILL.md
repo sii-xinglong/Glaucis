@@ -25,7 +25,6 @@ Execute these steps in order:
    - `variants_per_round` (N): how many variants to generate per active lineage per round
    - `top_k` (K): how many best lineages survive each round
    - `max_active_lineages`: cap on total active lineages to prevent exponential growth
-   - `diversity_directions`: list of technical directions to guide variant generation (e.g., `tiling_strategy`, `hbm_compute_overlap`, `mxu_vpu_overlap`, `memory_layout`, `mxu_utilization`, `vectorization`)
 
    If `batch` section is missing, default to `variants_per_round=1, top_k=1` (single-variant behavior).
 
@@ -255,18 +254,26 @@ Before generating variants, read the previous round's best variant's raw profili
 
 #### Round 1 (No lineages yet)
 
-Generate N variants from the baseline kernel, each exploring a DIFFERENT technical direction from the `diversity_directions` list:
+Generate N variants from the baseline kernel, each exploring a DIFFERENT technical direction **derived from the profile brief's bottleneck diagnosis and optimization priorities**:
 
 1. Re-read AGENT.md failure patterns and successful optimizations
 2. Prepare shared context for sub-agents: read the template kernel content, AGENT.md content, and **profile brief content** (from Phase 0) into variables
-3. **Dispatch N sub-agents in parallel** (one Agent tool call per direction, all in a single message):
+3. **Derive N directions from the profile brief**: Read the profile brief's "Optimization Priorities" and "Bottleneck Diagnosis" sections. Based on the diagnosed bottleneck and supporting metrics, select N concrete optimization directions. Each direction must be a genuinely different technical approach motivated by a specific profile signal. For example, if the profile shows `compute_ratio=0.35` (memory-bound) with `dual_ratio=0.0` and `1.9M register spills`, you might derive:
+   - `k_tiling` — motivated by low compute_ratio (memory-bound)
+   - `register_pressure_reduction` — motivated by 1.9M spills
+   - `mxu_dual_scheduling` — motivated by dual_ratio=0.0
+   - `dma_prefetch` — motivated by no double buffering in LLO trace
+   - `loop_restructuring` — motivated by low ILP (avg_ops_per_bundle)
+
+   **Do NOT use a fixed list of directions.** Each session's directions must be uniquely tailored to what the profile data actually shows.
+4. **Dispatch N sub-agents in parallel** (one Agent tool call per direction, all in a single message):
    Each sub-agent receives a prompt containing:
    - The full template kernel content
    - The AGENT.md failure patterns and successful optimizations
-   - Its assigned direction name (e.g., `hbm_compute_overlap`)
+   - Its assigned direction name (derived from the profile brief in step 3 above)
    - The TPU v7x hard rules and optimization knowledge from this skill
    - **The profile brief content** (full text of `iteration_1/profile_brief.md` generated in Phase 0), including hardware utilization, bottleneck diagnosis, LLO key observations, and optimization priorities
-   - **Direction-specific guidance**: Based on the profile brief's bottleneck diagnosis, explain how this sub-agent's assigned direction relates to the identified bottleneck. For example: "The profile shows compute_ratio=0.35 (memory-bound) with no double buffering. Your direction `hbm_compute_overlap` should focus on adding DMA prefetch to hide the 65% memory transfer time visible in the LLO trace."
+   - **Direction-specific guidance**: Based on the profile brief's bottleneck diagnosis, explain what specific profile signal motivates this sub-agent's direction and what concrete optimization it should attempt. For example: "The profile shows compute_ratio=0.35 (memory-bound) with no double buffering. Your direction `dma_prefetch` should focus on adding DMA prefetch to hide the 65% memory transfer time visible in the LLO trace."
    - The output path: `iteration_1/variants/{direction_name}/kernel.py`
    - Instructions to:
      - Design an optimization approach specific to its assigned direction
@@ -275,11 +282,11 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
      - Preserve function signatures
      - Validate: the file must be valid Python (no syntax errors)
      - Return a summary: approach taken, **which profile signal motivated this approach**, expected impact on the identified bottleneck, **which hw utilization metric is expected to improve**, key changes
-4. Collect the returned summaries from all sub-agents and write `iteration_1/strategy.md`:
+5. Collect the returned summaries from all sub-agents and write `iteration_1/strategy.md`:
    ```markdown
    ## Round 1 Strategy
 
-   Generating {N} variants from baseline, each exploring a different technical direction.
+   Generating {N} variants from baseline, each exploring a different technical direction derived from profile analysis.
    Variants generated in parallel via sub-agents.
 
    ### Variant: {direction_1}
@@ -299,22 +306,23 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
 1. Read `lineages.json` for active lineages
 2. Re-read AGENT.md failure patterns and successful optimizations
 3. For each active lineage, read its `best_kernel` file
-4. Plan variant assignments:
-   - If only 1 active lineage: assign N different directions to it
+4. **Derive directions from the current round's profile brief**: Read `iteration_{N}/profile_brief.md` (generated in Phase 0). Based on the updated bottleneck diagnosis, delta vs baseline, and optimization priorities, select directions that address the **current** bottleneck — which may differ from previous rounds as the kernel evolves. Avoid repeating directions that the reflect skill (AGENT.md) has flagged as unsuccessful.
+5. Plan variant assignments:
+   - If only 1 active lineage: assign N different profile-derived directions to it
    - If multiple active lineages: distribute N variants across lineages (at least 1 per lineage, extras to best-performing lineages)
-5. Variant naming convention: `{lineage_id}_{direction}` (e.g., `L1_tiling`, `L2_memory`)
-6. **Dispatch all variant sub-agents in parallel** (one Agent tool call per variant, all in a single message):
+6. Variant naming convention: `{lineage_id}_{direction}` (e.g., `L1_tiling`, `L2_memory`)
+7. **Dispatch all variant sub-agents in parallel** (one Agent tool call per variant, all in a single message):
    Each sub-agent receives a prompt containing:
    - The base kernel content (from its assigned lineage's `best_kernel`)
    - The AGENT.md failure patterns and successful optimizations
    - Its assigned direction and lineage context (lineage ID, previous best speedup, prior direction)
    - The TPU v7x hard rules and optimization knowledge from this skill
    - **The profile brief content** (full text of `iteration_{N}/profile_brief.md`), including the delta vs baseline table, hardware utilization, bottleneck diagnosis, and LLO key observations
-   - **Direction-specific guidance**: Based on the profile brief's bottleneck diagnosis, explain how this sub-agent's assigned direction relates to the identified bottleneck and what changed since the previous round
+   - **Direction-specific guidance**: Based on the profile brief's bottleneck diagnosis, explain what specific profile signal motivates this direction and what concrete optimization it should attempt, referencing what changed since the previous round
    - The output path: `iteration_{N}/variants/{variant_name}/kernel.py`
    - Same mutation instructions as Round 1
    - Return a summary: approach taken, **which profile signal motivated this approach**, expected impact on the identified bottleneck, **which hw utilization metric is expected to improve**, key changes
-7. Collect the returned summaries from all sub-agents and write `iteration_{N}/strategy.md`:
+8. Collect the returned summaries from all sub-agents and write `iteration_{N}/strategy.md`:
    ```markdown
    ## Round {N} Strategy
 
