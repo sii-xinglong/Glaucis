@@ -1,29 +1,30 @@
 ---
 name: reflect
-description: Use when recording kernel optimization learnings to AGENT.md — extracts failure patterns and successful optimization root causes, updates GitHub Issue
+description: Use when recording batch kernel optimization learnings to AGENT.md — iterates over N variant results, extracts failure patterns and successful optimizations, posts round summary to GitHub Issue
 ---
 
-# Record Optimization Learnings
+# Record Batch Optimization Learnings
 
-After each evaluation iteration, extract learnings and record them to AGENT.md. Update the GitHub Issue with iteration results.
+After each batch evolution round, iterate over all variant results, extract learnings, and record them to AGENT.md. Post a round summary to the GitHub Issue.
 
 ## Context
 
-Invoked by `pallas-evolve:start` after `pallas-evolve:analyze`, or standalone. Expects both `iteration_{N}/eval_result.json` and `iteration_{N}/analysis.md` to exist.
+Invoked by `pallas-evolve:start` after `pallas-evolve:analyze`, or standalone. Expects the batch round directory `iteration_{N}/variants/*/eval_result.json`, along with `iteration_{N}/batch_analysis.md` and `iteration_{N}/selection.md`.
 
 ## Procedure
 
 ### Step 1: Read iteration data
 
 Read:
-- `iteration_{N}/eval_result.json` — the raw evaluation result
-- `iteration_{N}/analysis.md` — the bottleneck analysis
-- `iteration_{N}/strategy.md` — what optimization was attempted
+- `iteration_{N}/variants/*/eval_result.json` — evaluation results for ALL variants in this round
+- `iteration_{N}/batch_analysis.md` — comparative analysis across variants
+- `iteration_{N}/selection.md` — lineage selection decisions (promotions, prunings)
+- `iteration_{N}/strategy.md` — the optimization directions attempted this round
 - `AGENT.md` at the repo root — existing learnings
 
-### Step 2: Determine if this is a new learning
+### Step 2: Determine learnings across variants
 
-Not every iteration produces a learning. Only record when:
+Iterate over each variant's result. Not every variant produces a learning. Only record when:
 
 **Failure worth recording** (new pattern not already in AGENT.md):
 - A compilation error with a non-obvious cause
@@ -31,16 +32,23 @@ Not every iteration produces a learning. Only record when:
 - A timeout or infrastructure failure with a reproducible cause
 
 **Success worth recording** (meaningful improvement):
-- Speedup improved over the previous best
+- Speedup improved >=5% over the previous best
 - A specific technique produced a measurable improvement
 - The improvement reveals a generalizable optimization principle
+
+**Comparative learnings** (patterns across variants or rounds):
+- Direction X consistently outperforms direction Y across rounds
+- A mutation type reliably produces improvements vs. another
+- Lineage characteristics that predict success
 
 Skip recording if:
 - The failure is a trivial syntax error (typo, missing import)
 - The speedup change is negligible (<5% improvement)
 - A similar pattern already exists in AGENT.md (check by reading existing entries)
 
-### Step 3: Update AGENT.md (if new learning)
+**Deduplication within the round**: Multiple variants may hit the same failure or discover the same optimization. Only record each unique pattern once, noting which variants exhibited it.
+
+### Step 3: Update AGENT.md (if new learnings)
 
 AGENT.md lives at the **repo root** (`/AGENT.md`). If it doesn't exist, create it with:
 
@@ -77,29 +85,33 @@ AGENT.md lives at the **repo root** (`/AGENT.md`). If it doesn't exist, create i
 - For failures: update the existing entry with additional context rather than creating a duplicate
 - For successes: update with the new performance data if the technique is the same
 
+Batch all updates into a single AGENT.md write — do not make multiple separate edits.
+
 ### Step 4: Comment on GitHub Issue
 
-Post an iteration summary comment:
+Post a batch round summary comment:
 
 ```bash
 gh issue comment {issue_number} --body "$(cat <<'EOF'
-### Iteration {N}
+### Round {N} Summary
 
-**Status**: {SUCCESS/COMPILE_ERROR/INCORRECT}
-**Speedup**: {speedup}x (best: {best_speedup}x)
-**Strategy**: {one-line summary from strategy.md}
-**Bottleneck**: {classification from analysis.md}
+| Variant | Status | Speedup | Direction | Notable |
+|---------|--------|---------|-----------|---------|
+| {variant_name} | {SUCCESS/COMPILE_ERROR/INCORRECT} | {speedup}x | {direction} | {brief note} |
+| ... | ... | ... | ... | ... |
 
-{If AGENT.md was updated: "Recorded learning: [F/S{NNN}] {description}"}
+**Active Lineages:** {lineage_id} ({speedup}x, {direction}), ...
+**Pruned this round:** {pruned_variant_names or "none"}
+**New learnings:** {[F/S NNN] entries or "none"}
 EOF
 )"
 ```
 
 ### Step 5: Commit AGENT.md changes (if any)
 
-If AGENT.md was modified:
+If AGENT.md was modified, create a single commit for all changes from this round:
 
 ```bash
 git add AGENT.md
-git commit -m "docs(agent): record {F/S}{NNN} from {kernel_name} iteration {N}"
+git commit -m "docs(agent): record learnings from {kernel_name} round {N}"
 ```
