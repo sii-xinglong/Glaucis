@@ -36,16 +36,7 @@ def _has_tpu() -> bool:
     import jax
     devices = jax.devices()
     print(f"JAX devices: {devices}", file=sys.stderr)
-    has = any(d.platform == "tpu" for d in devices)
-    if not has:
-      print(f"JAX default backend: {jax.default_backend()}", file=sys.stderr)
-      try:
-        tpu_devices = jax.devices("tpu")
-        print(f"TPU devices (explicit): {tpu_devices}", file=sys.stderr)
-        has = len(tpu_devices) > 0
-      except RuntimeError as e:
-        print(f"TPU backend error: {e}", file=sys.stderr)
-    return has
+    return any(d.platform == "tpu" for d in devices)
   except Exception as e:
     print(f"TPU detection error: {e}", file=sys.stderr)
     return False
@@ -327,21 +318,12 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       if M and K and N:
         flops = 6.0 * M * K * N * G
 
-    # ── Diagnostics: list all files in dump dirs ───────────────────
+    # Log dump file counts
     for label, d in [("hlo", hlo_dir), ("llo", llo_dir),
                      ("mosaic", dump_path / "mosaic")]:
-      all_files = []
       d_path = Path(d)
-      if d_path.exists():
-        for root, _dirs, files in os.walk(d_path):
-          for f in files:
-            rel = os.path.relpath(os.path.join(root, f), d_path)
-            all_files.append(rel)
-      print(
-        f"Dump dir [{label}]: {len(all_files)} files"
-        + (f" — {all_files[:20]}" if all_files else ""),
-        file=sys.stderr,
-      )
+      count = sum(1 for _ in d_path.rglob("*") if _.is_file()) if d_path.exists() else 0
+      print(f"Dump dir [{label}]: {count} files", file=sys.stderr)
 
     # ── Parse LLO dumps ──────────────────────────────────────────────
     # LLO files are named: {hash}-{op_name}-{pass_num}-{pass_name}.txt
@@ -379,25 +361,11 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     # Pick the largest Pallas file (most likely to contain full LLO body)
     best_file = None
     if pallas_candidates:
-      # Sort by file size descending
       pallas_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
       best_file = pallas_candidates[0][0]
-      print(
-        f"LLO: selected Pallas file {os.path.basename(best_file)} "
-        f"({os.path.getsize(best_file)} bytes, "
-        f"op={pallas_candidates[0][1]}, pass={pallas_candidates[0][2]})",
-        file=sys.stderr,
-      )
     elif other_candidates:
       other_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
       best_file = other_candidates[0][0]
-      print(
-        f"LLO: no Pallas files, using {os.path.basename(best_file)} "
-        f"({os.path.getsize(best_file)} bytes)",
-        file=sys.stderr,
-      )
-    else:
-      print(f"LLO: no matching files in {llo_dir}", file=sys.stderr)
 
     if best_file is not None:
       with open(best_file) as fh:
@@ -425,10 +393,6 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       if mxu0_count + mxu1_count == 0:
         mxu0_count = len(re.findall(r"\bmatmul\b", llo_text, re.IGNORECASE))
         mxu1_count = len(re.findall(r"\bmxu\b", llo_text, re.IGNORECASE))
-      print(
-        f"LLO parse: bundles={bundle_count}, mxu0={mxu0_count}, mxu1={mxu1_count}",
-        file=sys.stderr,
-      )
 
     total_mxu = mxu0_count + mxu1_count
     if total_mxu > 0:
@@ -532,6 +496,8 @@ def _setup_dump_env():
     "--xla_jf_emit_annotations=true "
     f"--xla_mosaic_dump_to={_DUMP_DIR}/mosaic "
     "--xla_mosaic_enable_llo_source_annotations=true "
+    "--xla_enable_custom_call_region_trace=true "
+    "--xla_xprof_register_llo_debug_info=true "
     + os.environ.get("LIBTPU_INIT_ARGS", "")
   )
 
@@ -576,18 +542,8 @@ def main():
   ref_latency = ref_perf.get("latency_ms", perf_result["latency_ms"])
   speedup = ref_latency / perf_result["latency_ms"] if perf_result["latency_ms"] > 0 else 0.0
 
-  # Stage 4: Profile (non-fatal) — set xprof custom call flags before profiling
-  orig_libtpu = os.environ.get("LIBTPU_INIT_ARGS", "")
-  os.environ["LIBTPU_INIT_ARGS"] = (
-    "--xla_enable_custom_call_region_trace=true "
-    "--xla_xprof_register_llo_debug_info=true "
-    + orig_libtpu
-  )
+  # Stage 4: Profile (non-fatal)
   profile_result = stage_profile(compile_result["globals"], request["shapes"])
-  if orig_libtpu:
-    os.environ["LIBTPU_INIT_ARGS"] = orig_libtpu
-  else:
-    os.environ.pop("LIBTPU_INIT_ARGS", None)
 
   compute_ratio = None
   memory_transfer_ratio = None
@@ -596,26 +552,12 @@ def main():
     compute_ratio = profile_result["compute_ratio"]
     memory_transfer_ratio = profile_result["memory_transfer_ratio"]
     profile_diag = profile_result.get("diagnostics", {})
-    print(
-      f"Profile: compute_ratio={compute_ratio}, "
-      f"memory_transfer_ratio={memory_transfer_ratio}",
-      file=sys.stderr,
-    )
   else:
     profile_diag = {"error": profile_result.get("error", "unknown")}
-    print(
-      f"Profile skipped: {profile_result.get('error', 'unknown')}",
-      file=sys.stderr,
-    )
 
   # Stage 5: Deep profile (non-fatal) — parse dumps generated by earlier stages
   deep_profile = stage_profile_deep(compile_result["globals"], request["shapes"])
-  if deep_profile["ok"]:
-    print(
-      f"Deep profile: {json.dumps(deep_profile, default=str)}",
-      file=sys.stderr,
-    )
-  else:
+  if not deep_profile["ok"]:
     print(
       f"Deep profile skipped: {deep_profile.get('error', 'unknown')}",
       file=sys.stderr,
@@ -624,9 +566,7 @@ def main():
   # Compute efficiency from deep profile FLOPs and measured latency
   if deep_profile.get("flops") and perf_result["latency_ms"] > 0:
     actual_fps = deep_profile["flops"] / (perf_result["latency_ms"] / 1000.0)
-    compute_efficiency_pct = (actual_fps / 275e12) * 100.0  # TPU v7x BF16 peak
-    deep_profile["compute_efficiency_pct"] = compute_efficiency_pct
-    print(f"Compute efficiency: {compute_efficiency_pct:.2f}%", file=sys.stderr)
+    deep_profile["compute_efficiency_pct"] = (actual_fps / 275e12) * 100.0
 
   result = {
     "status": "SUCCESS",
