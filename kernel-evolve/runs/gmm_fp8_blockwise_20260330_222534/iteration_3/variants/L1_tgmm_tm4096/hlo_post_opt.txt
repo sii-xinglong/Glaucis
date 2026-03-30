@@ -1,0 +1,40 @@
+HloModule jit_abs, is_scheduled=true, entry_computation_layout={(f32[64,128,2048]{2,1,0:T(8,128)})->f32[64,128,2048]{2,1,0:T(8,128)}}, allow_spmd_sharding_propagation_to_parameters={true}, allow_spmd_sharding_propagation_to_output={true}
+
+FileNames
+1 "/workspace/kernel-evolve/docker/evaluate.py"
+2 "<string>"
+
+FunctionNames
+1 "stage_correctness"
+2 "simple_compute"
+3 "simple_compute.<locals>.loss_fn"
+4 "gmm_fp8_blockwise_ref"
+5 "<module>"
+6 "main"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=100 end_line=100 column=16 end_column=31}
+2 {file_name_id=2 function_name_id=2 line=165 end_line=165 column=14 end_column=67}
+3 {file_name_id=2 function_name_id=3 line=163 end_line=163 column=15 end_column=59}
+4 {file_name_id=2 function_name_id=4 line=151 end_line=151 column=11 end_column=58}
+5 {file_name_id=1 function_name_id=5 line=870 end_line=870 column=4 end_column=10}
+6 {file_name_id=1 function_name_id=6 line=731 end_line=738 column=19 end_column=3}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=1 parent_frame_id=7}
+8 {file_location_id=2 parent_frame_id=8}
+9 {file_location_id=3 parent_frame_id=9}
+10 {file_location_id=4 parent_frame_id=10}
+
+
+ENTRY %main.1 (x.1: f32[64,128,2048]) -> f32[64,128,2048] {
+  %x.1 = f32[64,128,2048]{2,1,0:T(8,128)} parameter(0), metadata={op_name="x"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  ROOT %abs.1 = f32[64,128,2048]{2,1,0:T(8,128)} abs(%x.1), metadata={op_name="jit(abs)/abs" stack_frame_id=10}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"22649243"}],"used_scoped_memory_configs":[],"aliasing_operands":{"lists":[]}}
+}
+

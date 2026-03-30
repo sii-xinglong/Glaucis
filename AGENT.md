@@ -180,6 +180,32 @@
 - **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0. Same VLIW/MXU as SO9.
 - **Rule**: For forward gmm with fp8 inputs, TK can exceed tile_size=128 without issues. Maximize TK up to the minimum K dimension across shapes (512 for this kernel).
 
+### SO11: Uniform TM=256 + bwd_gmm TK=512 compound effect (2.460x speedup)
+- **What**: Use TM=256 for BOTH fwd and bwd_gmm (per-group M alignment), plus TK=512 for bwd_gmm. Tiling: (256, 256, 128, 256, 512, 128, 2048, 512, 128).
+- **Why**: TM=256 matching per-group M (M=8192/G=32=256) creates exactly 1 sub-tile row, producing the simplest inner loop. TK=512 halves K-loop iterations for bwd_gmm. The combination compounds: TM=256 creates clean sub-tiles that TK=512 can efficiently iterate over. TM=1024 + TK=512 (L1_bwd_tk512) actually regressed because 1024/256=4 sub-tile rows × 4 K iterations creates complex loop nesting.
+- **Impact**: 2.460x speedup (4.182ms). +5.4% over SO10 (2.335x). New overall best.
+- **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0, compute_efficiency=17.09%, spills=234
+- **Rule**: For bwd_gmm, TM=256 (per-group alignment) enables TK=512 benefits. TM=1024+TK=512 does NOT help. Always pair per-group TM with larger TK.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
+
+### [FP12] Forward out_dtype=bfloat16 causes correctness failure
+- **Symptom**: Setting `out_dtype=jnp.bfloat16` in forward `tokamax_backend.gmm()` produces max_diff=2065.6875 (atol=1.0)
+- **Root cause**: bf16 accumulation truncates partial products during K-reduction. For K=2048, the sum of 2048 fp8×fp8 products loses significant precision at bf16. The reference uses f32 accumulation.
+- **Fix**: Forward `out_dtype` MUST remain `jnp.float32`. Do NOT use bf16 accumulation for forward pass.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
+
+### [FP13] tgmm TM=4096 causes VLIW complexity bloat without speedup
+- **Symptom**: tgmm TM=4096 doubles VLIW bundles (47,683 vs 23,462) and MXU ops (3,584 vs 1,792) but regresses speedup from 2.335x to 2.277x (-2.5%).
+- **Root cause**: TM=4096 tiles are too large for efficient compilation. The compiler generates 2x more code per tile without reducing total grid iterations proportionally. Accumulators of 4096×128×4B=2MB per tile likely cause internal compiler complexity.
+- **Fix**: tgmm TM should stay at 2048 for bf16 tgmm. TM=4096 is counterproductive.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
+
+### [FP14] bwd_gmm TK=512 regresses with TM=1024 but improves with TM=256
+- **Symptom**: bwd_gmm (1024, 512, 128) regresses to 2.307x from 2.335x (-1.2%). But bwd_gmm (256, 512, 128) improves to 2.460x (+5.4%).
+- **Root cause**: TM=1024 creates 1024/256=4 sub-tile rows, and TK=512 creates 512/128=4 K-iterations. The 4×4 inner loop structure generates 24,673 VLIW bundles (+5.2% over 23,462). TM=256 creates 1 sub-tile row × 4 K-iterations — much simpler loop structure.
+- **Fix**: When increasing TK, ensure TM is small enough to keep sub-tile count low. Per-group TM alignment (TM=256) is the prerequisite for TK enlargement.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
+
 ### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
 - **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
 - **Root cause**: tgmm with TK=512 generates 2x more matmul tiles, each doing a full K=512 reduction. TK=256 reduces the matmul work per tile by half. The extra VLIW bundles with TK=512 are dominated by MXU ops, which is beneficial.

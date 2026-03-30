@@ -1,0 +1,139 @@
+{
+  "status": "SUCCESS",
+  "variant_id": "L1_tgmm_tm4096",
+  "fitness": 2.2771137127929295,
+  "latency_ms": 4.704902499952368,
+  "speedup": 2.2771137127929295,
+  "flops": 1649267441664.0,
+  "compute_ratio": 1.0,
+  "memory_transfer_ratio": 0.0,
+  "metadata": {
+    "reference_latency_ms": 10.713597999995272,
+    "reference_perf_ok": true,
+    "profile_diagnostics": {
+      "process_names": {
+        "3": [
+          "/device:TPU:0",
+          "_counters_",
+          "XLA Modules",
+          "XLA Ops",
+          "Async XLA Ops",
+          "XLA TraceMe",
+          "Tensor Core",
+          "Tensor Core Sync Flag",
+          "counters_0",
+          "Framework Name Scope",
+          "Framework Ops",
+          "Source code"
+        ],
+        "701": [
+          "/host:CPU",
+          "main/58626",
+          "pjrt-tpu-tasks/58935",
+          "pjrt-tpu-tasks/58936",
+          "tfrt-non-blocking-queue/58958",
+          "EventFDAsyncWorker/58986",
+          "futex-default-SDomainT/59298",
+          "python",
+          "jit_convert_element_type",
+          "jit__threefry_seed",
+          "jit__threefry_split",
+          "jit__unstack",
+          "jit__normal",
+          "jit_reshape",
+          "jit_abs",
+          "jit__reduce_max",
+          "jit_true_divide",
+          "jit_equal",
+          "jit__where",
+          "jit_clip",
+          "jit_gmm",
+          "jit__reduce_sum",
+          "jit_broadcast_in_dim",
+          "jit_swapaxes",
+          "jit_tgmm"
+        ]
+      },
+      "selected_pid": 3,
+      "total_events": 225193,
+      "tpu_events": 221144,
+      "computation_events": 246,
+      "sync_wait_events": 12,
+      "event_names_sample": [
+        "<string>:109",
+        "<string>:122",
+        "<string>:134",
+        "<string>:204",
+        "<string>:47",
+        "<string>:97",
+        "MXU",
+        "Scalar ALU",
+        "Vector ALU",
+        "Vector EUP",
+        "Vector Fills",
+        "Vector Load",
+        "Vector Spills",
+        "Vector Store",
+        "XLU",
+        "a",
+        "abs",
+        "abs.1",
+        "accum:is_last_k_tile=False",
+        "accum:is_last_k_tile=True",
+        "add",
+        "add_add_fusion",
+        "add_bitcast_fusion",
+        "add_bitcast_fusion.1",
+        "add_convert_fusion",
+        "add_reduce_fusion",
+        "add_reduce_fusion.1",
+        "add_reduce_fusion.2",
+        "add_reduce_fusion.3",
+        "and_select_fusion"
+      ],
+      "window_us": 10511.901410000006,
+      "sync_wait_us": 0
+    },
+    "hw_utilization": {
+      "mxu_util_pct": 2.9499102197934656e-06,
+      "vector_alu_util_pct": 0.0019959681076037418,
+      "scalar_alu_util_pct": 0.008000403377861646,
+      "vector_load_util_pct": 2.9815298106199595e-05,
+      "vector_store_util_pct": 0.055594290404631236,
+      "vector_eup_util_pct": 0.0,
+      "vector_fills": 156,
+      "vector_spills": 156
+    },
+    "profile": {
+      "ok": true,
+      "vliw_bundle_count": 47683,
+      "mxu_utilization": {
+        "mxu0": 1792,
+        "mxu1": 1792,
+        "total": 3584,
+        "dual_ratio": 1.0,
+        "distribution": {
+          "mxu0_pct": 50.0,
+          "mxu1_pct": 50.0
+        }
+      },
+      "hbm_bandwidth_bytes": null,
+      "flops": 1649267441664.0,
+      "arithmetic_intensity": null,
+      "vmem_allocation": null,
+      "bundle_density": null,
+      "dma_analysis": {
+        "dma_count": 21,
+        "dma_sync_count": 6,
+        "double_buffering": true
+      },
+      "fusion_analysis": {
+        "fusion_count": 0,
+        "has_cross_program_prefetch": false
+      },
+      "special_units": null,
+      "compute_efficiency_pct": 15.194725654140258
+    },
+    "artifacts_gcs_prefix": "gs://glaucis-profiles/L1_tgmm_tm4096"
+  }
+}

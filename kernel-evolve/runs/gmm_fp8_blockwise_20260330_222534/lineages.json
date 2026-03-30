@@ -1,5 +1,5 @@
 {
-  "round": 2,
+  "round": 3,
   "config": {
     "top_k": 2,
     "max_active_lineages": 4
@@ -12,15 +12,15 @@
       "best_kernel": "iteration_2/variants/L1_fwd_tk512/kernel.py",
       "direction": "tiling_specialization",
       "history": ["iter-1-tiling_phase_specialization", "iter-2-L1_fwd_tk512"],
-      "stagnant_rounds": 0
+      "stagnant_rounds": 1
     },
     {
       "id": "L2",
       "parent": null,
-      "best_speedup": 2.290,
-      "best_kernel": "iteration_2/variants/L1_bwd_tm256/kernel.py",
+      "best_speedup": 2.460,
+      "best_kernel": "iteration_3/variants/L2_bwd_tm256_tk512/kernel.py",
       "direction": "tiling_specialization",
-      "history": ["iter-1-skip_lhs_t_fwd", "iter-2-L1_bwd_tm256"],
+      "history": ["iter-1-skip_lhs_t_fwd", "iter-2-L1_bwd_tm256", "iter-3-L2_bwd_tm256_tk512"],
       "stagnant_rounds": 0
     }
   ],
