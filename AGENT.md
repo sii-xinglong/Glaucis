@@ -223,6 +223,24 @@
 - **Rule**: Forward TN=256 is safe and beneficial for these shapes. N=512 gives exactly 2 tiles (perfect), N=2048 gives 8 tiles.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 5
 
+### [FP24] bf16 scale_dtype and tgmm TM=1024 are mutually exclusive optimizations
+- **Symptom**: Cross-pollinating SO14 (tgmm TM=1024) with SO15 (bf16 scales) regresses on BOTH lineages: L2_scale_bf16 (2.682x vs 2.847x, -5.8%), L1_tgmm_tm1024 (2.688x vs 2.819x, -4.6%). Spills decrease (156→81/84) but speedup decreases.
+- **Root cause**: bf16 scale dtype changes the compilation path such that the VLIW simplification from tgmm TM=1024 is negated. The two optimizations each work by changing the compiler's scheduling decisions, and these scheduling changes conflict. Fewer spills does NOT guarantee better performance when the VLIW schedule quality degrades.
+- **Fix**: Do NOT combine bf16 scale_dtype with tgmm TM=1024. Keep them as separate lineage strategies. L2 uses f32 scales + TM=1024, L1 uses bf16 scales + TM=2048.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
+
+### [FP25] tgmm TM<1024 causes regression — TM=1024 is the sweet spot
+- **Symptom**: tgmm TM=512 (2.719x, 576 MXU, 231 spills) and TM=256 (2.276x, 576 MXU, 84 spills) both regress from TM=1024 (2.847x, 896 MXU, 156 spills).
+- **Root cause**: TM=512 and TM=256 reduce MXU ops to 576 (from 896 at TM=1024) because smaller tiles produce fewer matmul operations per tile. The VLIW simplification trend (23,462→12,951) does NOT continue below TM=1024 (12,360 for TM=512, 8,497 for TM=256) — the overhead of more grid iterations dominates. TM=256 for tgmm does NOT benefit from per-group alignment the way fwd/bwd does, because tgmm's computation structure is fundamentally different (weight gradient accumulation vs. activation multiplication).
+- **Fix**: tgmm TM MUST be 1024 for bf16 tgmm. The range [512, 4096] has been fully explored: TM=512 (-4.5%), TM=1024 (optimal), TM=2048 (-2.7%), TM=4096 (FP13, bloat).
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
+
+### [FP26] bwd_gmm TN<128 causes correctness failure
+- **Symptom**: bwd TN=64 (with _clamp_tiling min lowered to 64) returns INCORRECT status.
+- **Root cause**: tokamax's internal tiling logic assumes TN >= 128. Sub-128 N tiles break the matmul decomposition or scale application, producing incorrect results.
+- **Fix**: All tiling dimensions MUST be >= 128. Do NOT lower the _clamp_tiling minimum below 128.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
+
 ### [FP22] Forward TK=1024 causes major regression
 - **Symptom**: fwd TK=1024 with TN=256 regresses from 2.751x to 2.498x (-9.2%), increases spills from 156 to 234.
 - **Root cause**: TK=1024 creates tiles that exceed the compiler's efficient scheduling range. For K=2048, TK=1024 means only 2 K-iterations — the loop body is too large (one iteration processes too much data) causing register pressure.
