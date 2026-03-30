@@ -277,6 +277,215 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
     return {"ok": False, "error": f"Profile error: {traceback.format_exc()}"}
 
 
+def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
+  """Stage 4b: Deep IR profiling via HLO/LLO/Mosaic dumps.
+
+  Self-contained — does NOT import from kernel_evolve.profiler.
+  Non-fatal: returns ok=False on failure without stopping the evaluation pipeline.
+  """
+  try:
+    import glob
+    import re
+    from pathlib import Path
+
+    import jax
+
+    _DTYPE_BYTES = {
+      "f32": 4, "float32": 4,
+      "f16": 2, "float16": 2,
+      "bf16": 2, "bfloat16": 2,
+      "f8e5m2": 1, "f8e4m3fn": 1,
+      "s32": 4, "int32": 4,
+      "s16": 2, "int16": 2,
+      "s8": 1, "int8": 1,
+    }
+
+    kernel_fn = exec_globals.get("optimized_compute") or exec_globals.get("kernel_fn")
+    if kernel_fn is None:
+      return {"ok": False, "error": "No kernel_fn found for deep profiling"}
+
+    shape = shapes[0]
+    dump_path = Path(dump_dir)
+    hlo_dir = dump_path / "hlo"
+    llo_dir = dump_path / "llo"
+    mosaic_dir = dump_path / "mosaic"
+    for d in [hlo_dir, llo_dir, mosaic_dir]:
+      d.mkdir(parents=True, exist_ok=True)
+
+    # Save original env vars
+    orig_xla_flags = os.environ.get("XLA_FLAGS", "")
+    orig_libtpu = os.environ.get("LIBTPU_INIT_ARGS", "")
+
+    try:
+      # Set XLA_FLAGS for HLO dumps
+      os.environ["XLA_FLAGS"] = (
+        f"--xla_dump_hlo_as_text --xla_dump_to={hlo_dir} " + orig_xla_flags
+      )
+
+      # Set LIBTPU_INIT_ARGS for LLO/Mosaic dumps
+      os.environ["LIBTPU_INIT_ARGS"] = (
+        f"--xla_jf_dump_to={llo_dir} "
+        f"--xla_jf_dump_hlo_text=true "
+        f"--xla_jf_dump_llo_text=true "
+        f"--xla_jf_emit_annotations=true "
+        f"--xla_mosaic_dump_to={mosaic_dir} "
+        f"--xla_mosaic_enable_llo_source_annotations=true "
+        + orig_libtpu
+      )
+
+      # Clear JAX caches to force recompilation with dump flags
+      jax.clear_caches()
+
+      # Run kernel once to generate dumps
+      out = kernel_fn(**shape)
+      if hasattr(out, "block_until_ready"):
+        out.block_until_ready()
+
+    finally:
+      # Restore original env vars
+      if orig_xla_flags:
+        os.environ["XLA_FLAGS"] = orig_xla_flags
+      else:
+        os.environ.pop("XLA_FLAGS", None)
+      if orig_libtpu:
+        os.environ["LIBTPU_INIT_ARGS"] = orig_libtpu
+      else:
+        os.environ.pop("LIBTPU_INIT_ARGS", None)
+
+    # ── Parse LLO dumps ──────────────────────────────────────────────
+    vliw_bundle_count = None
+    mxu_utilization = None
+    mxu0_count = 0
+    mxu1_count = 0
+
+    llo_files = glob.glob(str(llo_dir / "**" / "*.llo"), recursive=True)
+    llo_files += glob.glob(str(llo_dir / "**" / "*.llo.txt"), recursive=True)
+
+    # Find highest pass number file
+    best_pass = -1
+    best_file = None
+    pass_re = re.compile(r"pass[_.]?(\d+)")
+    for f in llo_files:
+      m = pass_re.search(os.path.basename(f))
+      if m:
+        pnum = int(m.group(1))
+        if pnum > best_pass:
+          best_pass = pnum
+          best_file = f
+      elif best_file is None:
+        best_file = f
+
+    if best_file is not None:
+      with open(best_file) as fh:
+        llo_text = fh.read()
+      # Count VLIW bundles (separated by `;;`)
+      bundle_count = len(llo_text.split(";;")) - 1
+      if bundle_count > 0:
+        vliw_bundle_count = bundle_count
+      # Count MXU operations (word boundary to avoid partial matches)
+      mxu0_count = len(re.findall(r"\.mxu0\b", llo_text))
+      mxu1_count = len(re.findall(r"\.mxu1\b", llo_text))
+
+    total_mxu = mxu0_count + mxu1_count
+    if total_mxu > 0:
+      max_mxu = max(mxu0_count, mxu1_count)
+      min_mxu = min(mxu0_count, mxu1_count)
+      mxu_utilization = {
+        "mxu0": mxu0_count,
+        "mxu1": mxu1_count,
+        "total": total_mxu,
+        "dual_ratio": min_mxu / max_mxu if max_mxu > 0 else 0.0,
+        "distribution": {
+          "mxu0_pct": mxu0_count / total_mxu * 100,
+          "mxu1_pct": mxu1_count / total_mxu * 100,
+        },
+      }
+
+    # ── Parse HLO dumps ──────────────────────────────────────────────
+    hbm_bytes = None
+    flops = None
+
+    hlo_files = glob.glob(str(hlo_dir / "**" / "*.txt"), recursive=True)
+    hlo_files += glob.glob(str(hlo_dir / "**" / "*.hlo"), recursive=True)
+
+    # Prefer files with 'after' in name (optimized HLO)
+    after_files = [f for f in hlo_files if "after" in os.path.basename(f).lower()]
+    chosen_hlo = after_files[0] if after_files else (hlo_files[0] if hlo_files else None)
+
+    if chosen_hlo is not None:
+      with open(chosen_hlo) as fh:
+        hlo_text = fh.read()
+
+      # Extract HBM bandwidth from custom_call with tpu_custom_call
+      shape_re = re.compile(r"(\w+)\[([\d,]+)\]")
+      cc_pat = re.compile(
+        r"(%\S+)\s*=\s*(\S+)\s+custom-call\(([^)]+)\)"
+        r"[^\"]*custom_call_target=\"tpu_custom_call\""
+      )
+      cc_match = cc_pat.search(hlo_text)
+      if cc_match:
+        hbm_bytes = 0
+        # Parse output shape
+        out_shape = cc_match.group(2)  # e.g., "bf16[8,2048,128]"
+        out_m = shape_re.match(out_shape)
+        if out_m and out_m.group(1) in _DTYPE_BYTES:
+          elems = 1
+          for d in out_m.group(2).split(","):
+            elems *= int(d)
+          hbm_bytes += elems * _DTYPE_BYTES[out_m.group(1)]
+
+        # Parse input operand names and look up their shapes
+        input_names = re.findall(r"(%\S+)", cc_match.group(3))
+        for name in input_names:
+          # Find parameter definition: %name = dtype[dims] parameter(N)
+          param_pat = re.compile(re.escape(name) + r"\s*=\s*(\w+\[\d[\d,]*\])")
+          param_m = param_pat.search(hlo_text)
+          if param_m:
+            inp_m = shape_re.match(param_m.group(1))
+            if inp_m and inp_m.group(1) in _DTYPE_BYTES:
+              elems = 1
+              for d in inp_m.group(2).split(","):
+                elems *= int(d)
+              hbm_bytes += elems * _DTYPE_BYTES[inp_m.group(1)]
+
+      # Extract FLOPs from dot operations (including contracting dims)
+      dot_pat = re.compile(
+        r"\w+\[([\d,]+)\]\s+"  # output shape
+        r"dot\(\s*\w+\[([\d,]+)\]\s+%\S+\s*,"  # lhs shape
+        r"\s*\w+\[([\d,]+)\]\s+%\S+\s*\)"  # rhs shape
+        r"\s*,\s*lhs_contracting_dims=\{([\d,]+)\}"  # contracting dims
+      )
+      for match in dot_pat.finditer(hlo_text):
+        if flops is None:
+          flops = 0.0
+        out_dims = [int(d) for d in match.group(1).split(",")]
+        lhs_dims = [int(d) for d in match.group(2).split(",")]
+        contract_indices = [int(d) for d in match.group(4).split(",")]
+        out_size = 1
+        for d in out_dims:
+          out_size *= d
+        contract_size = 1
+        for i in contract_indices:
+          if i < len(lhs_dims):
+            contract_size *= lhs_dims[i]
+        flops += 2.0 * out_size * contract_size
+
+    arithmetic_intensity = (
+      flops / hbm_bytes if flops and hbm_bytes else None
+    )
+
+    return {
+      "ok": True,
+      "vliw_bundle_count": vliw_bundle_count,
+      "mxu_utilization": mxu_utilization,
+      "hbm_bandwidth_bytes": hbm_bytes,
+      "flops": flops,
+      "arithmetic_intensity": arithmetic_intensity,
+    }
+  except Exception:
+    return {"ok": False, "error": f"Deep profile error: {traceback.format_exc()}"}
+
+
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("--eval-payload", required=True)
@@ -315,8 +524,19 @@ def main():
   ref_latency = ref_perf.get("latency_ms", perf_result["latency_ms"])
   speedup = ref_latency / perf_result["latency_ms"] if perf_result["latency_ms"] > 0 else 0.0
 
-  # Stage 4: Profile (non-fatal)
+  # Stage 4: Profile (non-fatal) — set xprof custom call flags before profiling
+  orig_libtpu = os.environ.get("LIBTPU_INIT_ARGS", "")
+  os.environ["LIBTPU_INIT_ARGS"] = (
+    "--xla_enable_custom_call_region_trace=true "
+    "--xla_xprof_register_llo_debug_info=true "
+    + orig_libtpu
+  )
   profile_result = stage_profile(compile_result["globals"], request["shapes"])
+  if orig_libtpu:
+    os.environ["LIBTPU_INIT_ARGS"] = orig_libtpu
+  else:
+    os.environ.pop("LIBTPU_INIT_ARGS", None)
+
   compute_ratio = None
   memory_transfer_ratio = None
   profile_diag = {}
@@ -336,18 +556,39 @@ def main():
       file=sys.stderr,
     )
 
+  # Stage 5: Deep profile (non-fatal)
+  deep_profile = stage_profile_deep(compile_result["globals"], request["shapes"])
+  if deep_profile["ok"]:
+    print(
+      f"Deep profile: {json.dumps(deep_profile, default=str)}",
+      file=sys.stderr,
+    )
+  else:
+    print(
+      f"Deep profile skipped: {deep_profile.get('error', 'unknown')}",
+      file=sys.stderr,
+    )
+
+  # Compute efficiency from deep profile FLOPs and measured latency
+  if deep_profile.get("flops") and perf_result["latency_ms"] > 0:
+    actual_fps = deep_profile["flops"] / (perf_result["latency_ms"] / 1000.0)
+    compute_efficiency_pct = (actual_fps / 275e12) * 100.0  # TPU v7x BF16 peak
+    deep_profile["compute_efficiency_pct"] = compute_efficiency_pct
+    print(f"Compute efficiency: {compute_efficiency_pct:.2f}%", file=sys.stderr)
+
   result = {
     "status": "SUCCESS",
     "fitness": speedup,
     "latency_ms": perf_result["latency_ms"],
     "speedup": speedup,
-    "flops": 0.0,
+    "flops": deep_profile.get("flops", 0.0) or 0.0,
     "compute_ratio": compute_ratio,
     "memory_transfer_ratio": memory_transfer_ratio,
     "metadata": {
       "reference_latency_ms": ref_latency,
       "reference_perf_ok": ref_perf.get("ok", False),
       "profile_diagnostics": profile_diag,
+      "profile": deep_profile,
     },
   }
   print(f"EVAL_RESULT:{json.dumps(result)}")

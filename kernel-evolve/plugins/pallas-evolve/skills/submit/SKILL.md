@@ -96,24 +96,12 @@ The job template is at the path specified by `evaluator.job_template` in the con
 
 ### Step 6: Wait for Job completion
 
-Poll every `poll_interval` seconds (from config, default 15) until the job completes, fails, or times out:
+Use `kubectl wait` to block until the job completes or fails:
 
 ```bash
-TIMEOUT={timeout}
-INTERVAL={poll_interval}
-ELAPSED=0
-while [ $ELAPSED -lt $TIMEOUT ]; do
-  STATUS=$(kubectl get job ${JOB_NAME} -n {namespace} -o jsonpath='{.status.conditions[0].type}' 2>/dev/null)
-  if [ "$STATUS" = "Complete" ] || [ "$STATUS" = "Failed" ]; then
-    echo "JOB_STATUS:$STATUS"
-    break
-  fi
-  sleep $INTERVAL
-  ELAPSED=$((ELAPSED + INTERVAL))
-done
-if [ $ELAPSED -ge $TIMEOUT ]; then
-  echo "JOB_STATUS:Timeout"
-fi
+kubectl wait --for=condition=complete --timeout={timeout}s job/${JOB_NAME} -n {namespace} 2>/dev/null && echo "JOB_STATUS:Complete" || \
+kubectl wait --for=condition=failed --timeout=5s job/${JOB_NAME} -n {namespace} 2>/dev/null && echo "JOB_STATUS:Failed" || \
+echo "JOB_STATUS:Timeout"
 ```
 
 Use a Bash tool call with `timeout: {timeout * 1000 + 30000}` (timeout in ms, plus buffer).
