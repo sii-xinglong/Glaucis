@@ -402,13 +402,20 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     if best_file is not None:
       with open(best_file) as fh:
         llo_text = fh.read()
-      # Count VLIW bundles — two formats:
+      # Count VLIW bundles — multiple formats:
       #   Classic: separated by `;;`
       #   v7x libtpu: numbered entries like `  N  :  { ... }`
+      #   v7x alt: `bundle N` markers
       bundle_count = llo_text.count(";;")
       if bundle_count == 0:
-        # Try v7x format: count lines matching `  <num>  :  {`
         bundle_count = len(re.findall(r"^\s*\d+\s*:\s*\{", llo_text, re.MULTILINE))
+      if bundle_count == 0:
+        bundle_count = len(re.findall(r"\bbundle\s+\d+", llo_text, re.IGNORECASE))
+      if bundle_count == 0:
+        # Last resort: count instruction-like lines (register assignments)
+        bundle_count = len(re.findall(
+          r"^\s*%\w+\s*=", llo_text, re.MULTILINE,
+        ))
       if bundle_count > 0:
         vliw_bundle_count = bundle_count
       # Count MXU operations — multiple naming conventions
