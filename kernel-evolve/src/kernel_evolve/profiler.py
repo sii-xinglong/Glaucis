@@ -234,6 +234,122 @@ def parse_mxu_distribution(llo_text: str) -> dict | None:
   }
 
 
+def parse_vmem_allocations(llo_text: str) -> dict | None:
+  """Parse #allocation entries from LLO text and sum VMEM/SMEM bytes.
+
+  Returns {"vmem_bytes": int, "smem_bytes": int, "allocation_count": int}
+  or None if no allocations found.
+  """
+  pattern = re.compile(
+    r"#allocation\d+\s*=\s*\w+\[[^\]]*\](?:,\s*space=(\w+))?,\s*size=0x([0-9a-fA-F]+)"
+  )
+  matches = list(pattern.finditer(llo_text))
+  if not matches:
+    return None
+  vmem_bytes = 0
+  smem_bytes = 0
+  for m in matches:
+    space = m.group(1)
+    size = int(m.group(2), 16)
+    if space == "smem":
+      smem_bytes += size
+    else:
+      vmem_bytes += size
+  return {
+    "vmem_bytes": vmem_bytes,
+    "smem_bytes": smem_bytes,
+    "allocation_count": len(matches),
+  }
+
+
+def analyze_bundle_density(llo_text: str) -> dict | None:
+  """Analyze instruction-level parallelism by counting ops per VLIW bundle.
+
+  Splits LLO text by ';;', counts instruction lines (%var = ...) per segment.
+  Skips the last segment after the final ';;'.
+
+  Returns {"total_bundles": int, "avg_ops_per_bundle": float,
+           "max_ops_per_bundle": int} or None if no bundles found.
+  """
+  if not llo_text:
+    return None
+  segments = llo_text.split(";;")
+  # Skip the last segment (after final ;;)
+  if len(segments) < 2:
+    return None
+  bundles = segments[:-1]
+  inst_pattern = re.compile(r"^\s*%\w+\s*=\s*", re.MULTILINE)
+  ops_per_bundle = []
+  for bundle in bundles:
+    count = len(inst_pattern.findall(bundle))
+    if count > 0:
+      ops_per_bundle.append(count)
+  if not ops_per_bundle:
+    return None
+  return {
+    "total_bundles": len(ops_per_bundle),
+    "avg_ops_per_bundle": sum(ops_per_bundle) / len(ops_per_bundle),
+    "max_ops_per_bundle": max(ops_per_bundle),
+  }
+
+
+def analyze_dma_ops(llo_text: str) -> dict | None:
+  """Count DMA operations and detect double-buffering patterns in LLO text.
+
+  Returns {"dma_count": int, "dma_sync_count": int, "double_buffering": bool}
+  or None if no DMA operations found.
+  """
+  dma_count = len(re.findall(r"\bdma\.\w+", llo_text))
+  if dma_count == 0:
+    return None
+  dma_sync_count = len(re.findall(r"\bdma\.done\.wait\b", llo_text))
+  double_buffering = bool(re.search(r"\bsand\.u32\s+1\b", llo_text))
+  return {
+    "dma_count": dma_count,
+    "dma_sync_count": dma_sync_count,
+    "double_buffering": double_buffering,
+  }
+
+
+def count_hlo_fusions(hlo_text: str) -> dict | None:
+  """Count fused_computation blocks and check for cross-program prefetch in HLO.
+
+  Returns {"fusion_count": int, "has_cross_program_prefetch": bool}
+  or None if hlo_text is empty.
+  """
+  if not hlo_text:
+    return None
+  fusion_count = len(re.findall(r"^fused_computation", hlo_text, re.MULTILINE))
+  has_cross_program_prefetch = bool(
+    re.search(r"cross_program_prefetch_index=", hlo_text)
+  )
+  return {
+    "fusion_count": fusion_count,
+    "has_cross_program_prefetch": has_cross_program_prefetch,
+  }
+
+
+def analyze_special_units(llo_text: str) -> dict | None:
+  """Count special hardware unit usage in LLO text.
+
+  Tracks xlane (cross-lane), EUP (extended unit processor), and NOP ops.
+  Returns {"xlane_ops": int, "eup_ops": int, "nop_count": int}
+  or None if all counts are 0.
+  """
+  xlane_ops = len(re.findall(r"\b\w+\.xlane\b", llo_text))
+  eup_ops = len(re.findall(r"\bvpow2\b", llo_text)) + len(
+    re.findall(r"\bvpop\.eup\b", llo_text)
+  )
+  nop_count = len(re.findall(r"^\s*nop\b", llo_text, re.MULTILINE))
+  if xlane_ops == 0 and eup_ops == 0 and nop_count == 0:
+    return None
+  return {
+    "xlane_ops": xlane_ops,
+    "eup_ops": eup_ops,
+    "nop_count": nop_count,
+  }
+
+
 def estimate_hbm_bandwidth(hlo_text: str) -> int | None:
   """Parse first tpu_custom_call in HLO text, sum input + output bytes from shapes.
 
@@ -321,7 +437,7 @@ def compute_derived_metrics(
   flops: float | None,
   hbm_bytes: int | None,
   latency_ms: float,
-  peak_flops_per_sec: float = 275e12,
+  peak_flops_per_sec: float = 2307e12,
 ) -> dict:
   """Compute arithmetic intensity and compute efficiency.
 
