@@ -43,6 +43,7 @@ class KubeEvaluator(Evaluator):
       "BRANCH": self._config.branch,
       "REPO": self._config.repo,
       "VARIANT_ID": request.variant_id,
+      "ACTIVE_DEADLINE": "600",
     }
     tmpl = string.Template(template_text)
     return tmpl.safe_substitute(mapping)
