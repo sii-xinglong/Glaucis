@@ -90,11 +90,15 @@ def _chunk_gla_fwd_o(q, v, g_cumsum, A, h, scale, chunk_size):
     A_flat = A.reshape(-1, C, H, C)
 
     qg = q_flat * jnp.exp(gc_flat)
-    o_inter = scale * jnp.einsum("nchk,nhkv->nchv", qg, h_flat)
+    o_inter = scale * jnp.einsum("nchk,nhkv->nchv", qg, h_flat,
+                                  precision=lax.Precision.HIGHEST,
+                                  preferred_element_type=jnp.float32)
 
     causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.bool_))[:, None, :]
     n_A = jnp.where(causal_mask, A_flat, 0.0)
-    o_intra = jnp.einsum("nihj,njhv->nihv", n_A, v_flat)
+    o_intra = jnp.einsum("nihj,njhv->nihv", n_A, v_flat,
+                          precision=lax.Precision.HIGHEST,
+                          preferred_element_type=jnp.float32)
 
     return (o_inter + o_intra).reshape(B, T, H, V)
 
