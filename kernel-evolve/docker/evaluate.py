@@ -345,8 +345,9 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
 
     # ── Parse LLO dumps ──────────────────────────────────────────────
     # LLO files are named: {hash}-{op_name}-{pass_num}-{pass_name}.txt
-    # We want the final scheduled pass (highest pass number) for the
-    # custom-call op (Pallas kernel), which contains VLIW bundles and MXU ops.
+    # The actual kernel body is in files with "pallas" in op_name (not
+    # "custom-call" which is just the wrapper). We want the final pass
+    # with the most instructions (largest file).
     vliw_bundle_count = None
     mxu_utilization = None
     mxu0_count = 0
@@ -356,51 +357,71 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
 
     # Parse filename pattern: {hash}-{op_name}-{pass_num}-{pass_name}.txt
     file_re = re.compile(r"^\d+-(.+?)-(\d+)-(.+)\.txt$")
-    best_pass = -1
-    best_file = None
+
+    # Strategy: find the largest file among Pallas kernel final passes.
+    # Pallas ops are named pallas_tpu_*. Final passes include
+    # "final_bundles", "packed-bundles", "schedule-analysis".
+    pallas_candidates = []
+    other_candidates = []
     for f in llo_files:
       m = file_re.match(os.path.basename(f))
       if not m:
         continue
       op_name = m.group(1)
       pass_num = int(m.group(2))
-      # Prefer custom-call ops (Pallas kernels) with highest pass number
-      if "custom-call" in op_name or "custom_call" in op_name:
-        if pass_num > best_pass:
-          best_pass = pass_num
-          best_file = f
+      pass_name = m.group(3)
+      entry = (f, op_name, pass_num, pass_name)
+      if "pallas" in op_name.lower():
+        pallas_candidates.append(entry)
+      elif "custom-call" in op_name or "custom_call" in op_name:
+        other_candidates.append(entry)
 
-    # Fallback: if no custom-call found, try any file with highest pass
-    if best_file is None:
-      for f in llo_files:
-        m = file_re.match(os.path.basename(f))
-        if m:
-          pass_num = int(m.group(2))
-          if pass_num > best_pass:
-            best_pass = pass_num
-            best_file = f
+    # Pick the largest Pallas file (most likely to contain full LLO body)
+    best_file = None
+    if pallas_candidates:
+      # Sort by file size descending
+      pallas_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
+      best_file = pallas_candidates[0][0]
+      print(
+        f"LLO: selected Pallas file {os.path.basename(best_file)} "
+        f"({os.path.getsize(best_file)} bytes, "
+        f"op={pallas_candidates[0][1]}, pass={pallas_candidates[0][2]})",
+        file=sys.stderr,
+      )
+    elif other_candidates:
+      other_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
+      best_file = other_candidates[0][0]
+      print(
+        f"LLO: no Pallas files, using {os.path.basename(best_file)} "
+        f"({os.path.getsize(best_file)} bytes)",
+        file=sys.stderr,
+      )
+    else:
+      print(f"LLO: no matching files in {llo_dir}", file=sys.stderr)
 
     if best_file is not None:
-      print(
-        f"LLO: selected {os.path.basename(best_file)} (pass {best_pass})",
-        file=sys.stderr,
-      )
       with open(best_file) as fh:
         llo_text = fh.read()
-      print(
-        f"LLO: {len(llo_text)} chars, "
-        f"';;' count={llo_text.count(';;')}, "
-        f"'.mxu' count={llo_text.count('.mxu')}, "
-        f"first 300: {llo_text[:300]!r}",
-        file=sys.stderr,
-      )
-      # Count VLIW bundles (separated by `;;`)
-      bundle_count = len(llo_text.split(";;")) - 1
+      # Count VLIW bundles — two formats:
+      #   Classic: separated by `;;`
+      #   v7x libtpu: numbered entries like `  N  :  { ... }`
+      bundle_count = llo_text.count(";;")
+      if bundle_count == 0:
+        # Try v7x format: count lines matching `  <num>  :  {`
+        bundle_count = len(re.findall(r"^\s*\d+\s*:\s*\{", llo_text, re.MULTILINE))
       if bundle_count > 0:
         vliw_bundle_count = bundle_count
-      # Count MXU operations (word boundary to avoid partial matches)
+      # Count MXU operations — multiple naming conventions
       mxu0_count = len(re.findall(r"\.mxu0\b", llo_text))
       mxu1_count = len(re.findall(r"\.mxu1\b", llo_text))
+      # v7x may use different MXU names: matmul, dot, mxu, tc (tensor core)
+      if mxu0_count + mxu1_count == 0:
+        mxu0_count = len(re.findall(r"\bmatmul\b", llo_text, re.IGNORECASE))
+        mxu1_count = len(re.findall(r"\bmxu\b", llo_text, re.IGNORECASE))
+      print(
+        f"LLO parse: bundles={bundle_count}, mxu0={mxu0_count}, mxu1={mxu1_count}",
+        file=sys.stderr,
+      )
 
     total_mxu = mxu0_count + mxu1_count
     if total_mxu > 0:
