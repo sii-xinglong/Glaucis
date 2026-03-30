@@ -159,6 +159,11 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
     trace_data = json.loads(tool_data_result)
     events = trace_data.get("traceEvents", [])
 
+    # Save trace events for GCS upload
+    trace_events_path = os.path.join(trace_dir, "trace_events.json")
+    with open(trace_events_path, "w") as f:
+      json.dump(events, f)
+
     # Collect process names per pid for diagnostics
     process_names: dict[int, list[str]] = {}
     for event in events:
@@ -263,6 +268,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       "compute_ratio": 1.0 - ratio,
       "memory_transfer_ratio": ratio,
       "diagnostics": diag,
+      "_trace_events_path": trace_events_path,
     }
   except Exception:
     return {"ok": False, "error": f"Profile error: {traceback.format_exc()}"}
@@ -466,6 +472,8 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       "hbm_bandwidth_bytes": hbm_bytes,
       "flops": flops,
       "arithmetic_intensity": arithmetic_intensity,
+      "_hlo_file": chosen_hlo,
+      "_llo_file": best_file,
     }
   except Exception:
     return {"ok": False, "error": f"Deep profile error: {traceback.format_exc()}"}
