@@ -235,23 +235,23 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
           ),
         }
 
-    # Focus on the last iteration window
-    start_last = computation_events[-2]["ts"] + computation_events[-2]["dur"]
-    end_last = computation_events[-1]["ts"] + computation_events[-1]["dur"]
+    # Use full trace span from first to last computation event
+    trace_start = computation_events[0]["ts"]
+    trace_end = computation_events[-1]["ts"] + computation_events[-1]["dur"]
 
-    # Sum SyncWait/idle durations within the window
+    # Sum SyncWait/idle durations within the full trace window
     sync_wait_total = 0
     for event in events_for_tpu:
       if "dur" not in event:
         continue
       evt_start = event["ts"]
       evt_end = evt_start + event["dur"]
-      if evt_start >= start_last and evt_end <= end_last:
+      if evt_start >= trace_start and evt_end <= trace_end:
         name = event.get("name") or ""
         if "SyncWait" in name or "idle" in name.lower():
           sync_wait_total += event["dur"]
 
-    total_time = end_last - start_last
+    total_time = trace_end - trace_start
     if total_time <= 0:
       return {"ok": False, "error": "Invalid trace timing (total_time <= 0)"}
 
@@ -277,7 +277,89 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
     return {"ok": False, "error": f"Profile error: {traceback.format_exc()}"}
 
 
-def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
+def _run_dump_subprocess(kernel_code, shape, hlo_dir, llo_dir, mosaic_dir):
+  """Run kernel in a subprocess with XLA/LIBTPU dump flags set before JAX init."""
+  import subprocess
+  import tempfile
+
+  config = {
+    "hlo_dir": str(hlo_dir),
+    "llo_dir": str(llo_dir),
+    "mosaic_dir": str(mosaic_dir),
+    "shape": shape,
+  }
+
+  config_fd, config_path = tempfile.mkstemp(suffix=".json")
+  kernel_fd, kernel_path = tempfile.mkstemp(suffix=".py")
+  driver_fd, driver_path = tempfile.mkstemp(suffix=".py")
+
+  try:
+    with os.fdopen(config_fd, "w") as cf:
+      json.dump(config, cf)
+    with os.fdopen(kernel_fd, "w") as kf:
+      kf.write(kernel_code)
+    with os.fdopen(driver_fd, "w") as df:
+      df.write(_DUMP_DRIVER_SCRIPT)
+
+    result = subprocess.run(
+      [sys.executable, driver_path, config_path, kernel_path],
+      capture_output=True, text=True, timeout=300,
+    )
+    if result.stderr:
+      print(f"Dump subprocess stderr (last 1000): {result.stderr[-1000:]}", file=sys.stderr)
+    if result.returncode != 0:
+      print(f"Dump subprocess failed (rc={result.returncode})", file=sys.stderr)
+  finally:
+    for p in [config_path, kernel_path, driver_path]:
+      try:
+        os.unlink(p)
+      except OSError:
+        pass
+
+
+_DUMP_DRIVER_SCRIPT = '''\
+import os, sys, json
+
+config = json.load(open(sys.argv[1]))
+hlo_dir = config["hlo_dir"]
+llo_dir = config["llo_dir"]
+mosaic_dir = config["mosaic_dir"]
+shape = config["shape"]
+
+# Set dump flags BEFORE importing JAX so libtpu reads them at init
+os.environ["XLA_FLAGS"] = (
+    f"--xla_dump_hlo_as_text --xla_dump_to={hlo_dir} "
+    + os.environ.get("XLA_FLAGS", "")
+)
+os.environ["LIBTPU_INIT_ARGS"] = (
+    f"--xla_jf_dump_to={llo_dir} "
+    "--xla_jf_dump_hlo_text=true "
+    "--xla_jf_dump_llo_text=true "
+    "--xla_jf_emit_annotations=true "
+    f"--xla_mosaic_dump_to={mosaic_dir} "
+    "--xla_mosaic_enable_llo_source_annotations=true "
+    + os.environ.get("LIBTPU_INIT_ARGS", "")
+)
+os.environ.setdefault("JAX_PLATFORMS", "tpu,cpu")
+os.environ.setdefault("ENABLE_PJRT_COMPATIBILITY", "true")
+
+import jax  # noqa: E402 — must import after setting env vars
+
+kernel_code = open(sys.argv[2]).read()
+g = {}
+exec(kernel_code, g)
+fn = g.get("optimized_compute") or g.get("kernel_fn")
+if fn is None:
+    print("ERROR: No compute function found", file=sys.stderr)
+    sys.exit(1)
+out = fn(**shape)
+if hasattr(out, "block_until_ready"):
+    out.block_until_ready()
+print("DUMP_COMPLETE", file=sys.stderr)
+'''
+
+
+def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps", kernel_code=None):
   """Stage 4b: Deep IR profiling via HLO/LLO/Mosaic dumps.
 
   Self-contained — does NOT import from kernel_evolve.profiler.
@@ -300,10 +382,6 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       "s8": 1, "int8": 1,
     }
 
-    kernel_fn = exec_globals.get("optimized_compute") or exec_globals.get("kernel_fn")
-    if kernel_fn is None:
-      return {"ok": False, "error": "No kernel_fn found for deep profiling"}
-
     shape = shapes[0]
     dump_path = Path(dump_dir)
     hlo_dir = dump_path / "hlo"
@@ -312,45 +390,47 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     for d in [hlo_dir, llo_dir, mosaic_dir]:
       d.mkdir(parents=True, exist_ok=True)
 
-    # Save original env vars
-    orig_xla_flags = os.environ.get("XLA_FLAGS", "")
-    orig_libtpu = os.environ.get("LIBTPU_INIT_ARGS", "")
+    if kernel_code is not None:
+      # Run in subprocess with dump flags set before JAX init
+      _run_dump_subprocess(kernel_code, shape, hlo_dir, llo_dir, mosaic_dir)
+    else:
+      # Fallback: in-process (may not produce dumps if flags are read only at init)
+      kernel_fn = exec_globals.get("optimized_compute") or exec_globals.get("kernel_fn")
+      if kernel_fn is None:
+        return {"ok": False, "error": "No kernel_fn found for deep profiling"}
 
-    try:
-      # Set XLA_FLAGS for HLO dumps
-      os.environ["XLA_FLAGS"] = (
-        f"--xla_dump_hlo_as_text --xla_dump_to={hlo_dir} " + orig_xla_flags
-      )
+      orig_xla_flags = os.environ.get("XLA_FLAGS", "")
+      orig_libtpu = os.environ.get("LIBTPU_INIT_ARGS", "")
 
-      # Set LIBTPU_INIT_ARGS for LLO/Mosaic dumps
-      os.environ["LIBTPU_INIT_ARGS"] = (
-        f"--xla_jf_dump_to={llo_dir} "
-        f"--xla_jf_dump_hlo_text=true "
-        f"--xla_jf_dump_llo_text=true "
-        f"--xla_jf_emit_annotations=true "
-        f"--xla_mosaic_dump_to={mosaic_dir} "
-        f"--xla_mosaic_enable_llo_source_annotations=true "
-        + orig_libtpu
-      )
+      try:
+        os.environ["XLA_FLAGS"] = (
+          f"--xla_dump_hlo_as_text --xla_dump_to={hlo_dir} " + orig_xla_flags
+        )
+        os.environ["LIBTPU_INIT_ARGS"] = (
+          f"--xla_jf_dump_to={llo_dir} "
+          f"--xla_jf_dump_hlo_text=true "
+          f"--xla_jf_dump_llo_text=true "
+          f"--xla_jf_emit_annotations=true "
+          f"--xla_mosaic_dump_to={mosaic_dir} "
+          f"--xla_mosaic_enable_llo_source_annotations=true "
+          + orig_libtpu
+        )
 
-      # Clear JAX caches to force recompilation with dump flags
-      jax.clear_caches()
+        jax.clear_caches()
 
-      # Run kernel once to generate dumps
-      out = kernel_fn(**shape)
-      if hasattr(out, "block_until_ready"):
-        out.block_until_ready()
+        out = kernel_fn(**shape)
+        if hasattr(out, "block_until_ready"):
+          out.block_until_ready()
 
-    finally:
-      # Restore original env vars
-      if orig_xla_flags:
-        os.environ["XLA_FLAGS"] = orig_xla_flags
-      else:
-        os.environ.pop("XLA_FLAGS", None)
-      if orig_libtpu:
-        os.environ["LIBTPU_INIT_ARGS"] = orig_libtpu
-      else:
-        os.environ.pop("LIBTPU_INIT_ARGS", None)
+      finally:
+        if orig_xla_flags:
+          os.environ["XLA_FLAGS"] = orig_xla_flags
+        else:
+          os.environ.pop("XLA_FLAGS", None)
+        if orig_libtpu:
+          os.environ["LIBTPU_INIT_ARGS"] = orig_libtpu
+        else:
+          os.environ.pop("LIBTPU_INIT_ARGS", None)
 
     # ── Parse LLO dumps ──────────────────────────────────────────────
     vliw_bundle_count = None
@@ -556,8 +636,11 @@ def main():
       file=sys.stderr,
     )
 
-  # Stage 5: Deep profile (non-fatal)
-  deep_profile = stage_profile_deep(compile_result["globals"], request["shapes"])
+  # Stage 5: Deep profile (non-fatal) — run in subprocess for clean env
+  deep_profile = stage_profile_deep(
+    compile_result["globals"], request["shapes"],
+    kernel_code=request["kernel_code"],
+  )
   if deep_profile["ok"]:
     print(
       f"Deep profile: {json.dumps(deep_profile, default=str)}",
