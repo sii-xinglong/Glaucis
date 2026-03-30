@@ -135,3 +135,16 @@
 - **Key insight**: More VLIW bundles (23,462 vs 17,558) but FASTER because MXU throughput doubled. VLIW bundle count alone is not a reliable quality metric — MXU ops per bundle matters more.
 - **Rule**: For grouped matmul, match TM to per-group M dimension for optimal tile utilization. More tiles with exact sizing beats fewer tiles with partial utilization.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise session 2, round 1
+
+### SO10: Forward TK=512 + tgmm TK=512 (2.335x speedup)
+- **What**: Increase forward K-tiling from 256 to 512. Tiling: (256, 512, 128, 1024, 256, 128, 2048, 512, 128).
+- **Why**: Forward TK=512 halves K-loop iterations for Gate/Up (K=2048: 4 iterations instead of 8). For Down (K=512), TK=512 means single K-iteration. Combined with tgmm TK=512 from SO9.
+- **Impact**: 2.335x speedup (4.403ms). +1.8% over SO9 (2.294x).
+- **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0. Same VLIW/MXU as SO9.
+- **Rule**: For forward gmm with fp8 inputs, TK can exceed tile_size=128 without issues. Maximize TK up to the minimum K dimension across shapes (512 for this kernel).
+
+### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
+- **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
+- **Root cause**: tgmm with TK=512 generates 2x more matmul tiles, each doing a full K=512 reduction. TK=256 reduces the matmul work per tile by half. The extra VLIW bundles with TK=512 are dominated by MXU ops, which is beneficial.
+- **Fix**: tgmm TK MUST be 512 (not 256) for optimal performance. The K-dimension is the most impactful tiling parameter for tgmm.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise session 2, round 2
