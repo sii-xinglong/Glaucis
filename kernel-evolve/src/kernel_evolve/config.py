@@ -44,6 +44,13 @@ class SessionConfig(BaseModel):
   output_dir: str = "runs/default"
 
 
+class BatchConfig(BaseModel):
+  variants_per_round: int = 1
+  top_k: int = 1
+  max_active_lineages: int = 4
+  diversity_directions: list[str] = Field(default_factory=list)
+
+
 class EvolveConfig(BaseModel):
   model_config = {"extra": "forbid"}
 
@@ -53,6 +60,7 @@ class EvolveConfig(BaseModel):
   evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
   tpu: TPUConfig
   session: SessionConfig = Field(default_factory=SessionConfig)
+  batch: BatchConfig = Field(default_factory=BatchConfig)
 
 
 def load_config(path: str | Path) -> EvolveConfig:
