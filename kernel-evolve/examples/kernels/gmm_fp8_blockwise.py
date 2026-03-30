@@ -50,17 +50,11 @@ def _make_test_data(M, K, N, G, seed=42):
 
 
 # EVOLVE-BLOCK-START
-def _clamp_tiling(tiling_triple, tile_size):
-    """Clamp only the K dimension (index 2) to tile_size."""
-    tm, tn, tk = tiling_triple
-    return (tm, tn, min(tk, tile_size))
-
-
 def gmm_fp8_blockwise(
     lhs: jnp.ndarray,
     rhs: jnp.ndarray,
     group_sizes: jnp.ndarray,
-    tiling: tuple[int, ...] = (1024, 256, 128, 1024, 256, 128, 1024, 128, 128),
+    tiling: tuple[int, ...] = (128, 128, 128) * 3,
 ) -> jnp.ndarray:
     """GMM with fp8_blockwise quantization and tokamax backend."""
     tile_size = 128
@@ -85,6 +79,7 @@ def gmm_fp8_blockwise(
 
 def _gmm_fwd(lhs, rhs, group_sizes, qt_rule, tiling):
     tile_size = qt_rule.tile_size
+    tiling = tuple(min(t, tile_size) for t in tiling)
 
     lhs_bf16 = lhs
     lhs = qpl.quantize(
@@ -95,7 +90,14 @@ def _gmm_fwd(lhs, rhs, group_sizes, qt_rule, tiling):
         calibration_method=qt_rule.act_calibration_method,
         scale_dtype=jnp.float32,
     )
-    # Defer lhs_t quantization to backward — save forward compute
+    lhs_t = qpl.quantize(
+        lhs_bf16.swapaxes(0, 1),
+        qt_rule.act_qtype,
+        channelwise_axes=[0],
+        tiled_axes={1: tile_size},
+        calibration_method=qt_rule.act_calibration_method,
+        scale_dtype=jnp.float32,
+    )
     rhs = qpl.quantize(
         rhs,
         qt_rule.weight_qtype,
@@ -105,28 +107,26 @@ def _gmm_fwd(lhs, rhs, group_sizes, qt_rule, tiling):
         scale_dtype=jnp.float32,
     )
 
-    fwd_tiling = _clamp_tiling(tiling[:3], tile_size)
     out = tokamax_backend.gmm(
         lhs=lhs,
         rhs=rhs,
         group_sizes=group_sizes,
         precision=jax.lax.Precision.DEFAULT,
         out_dtype=jnp.float32,
-        tiling=fwd_tiling,
+        tiling=tiling[:3],
         group_offset=None,
         transpose_rhs=False,
         interpret=False,
     )
-    # Store lhs_bf16 instead of pre-quantized lhs_t
-    return out, (lhs, rhs, group_sizes, lhs_bf16)
+    return out, (lhs, rhs, group_sizes, lhs_t)
 
 
 def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
-    lhs, rhs, group_sizes, lhs_bf16 = residual
+    lhs, rhs, group_sizes, lhs_t = residual
     num_actual_groups = rhs.shape[0]
     tile_size = qt_rule.tile_size
+    tiling = tuple(min(t, tile_size) for t in tiling)
 
-    # Only quantize what's needed for bwd_gmm
     dlhs_dout = qpl.quantize(
         grad,
         qt_rule.bwd_qtype,
@@ -135,22 +135,6 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
         calibration_method=qt_rule.bwd_calibration_method,
         scale_dtype=jnp.float32,
     )
-
-    bwd_gmm_tiling = _clamp_tiling(tiling[3:6] if len(tiling) >= 6 else tiling[:3], tile_size)
-    dlhs = tokamax_backend.gmm(
-        lhs=dlhs_dout,
-        rhs=rhs,
-        group_sizes=group_sizes,
-        precision=jax.lax.Precision.DEFAULT,
-        out_dtype=lhs_dtype,
-        tiling=bwd_gmm_tiling,
-        group_offset=None,
-        transpose_rhs=True,
-        interpret=False,
-    )
-
-    # Defer both drhs_dout and lhs_t quantization until after bwd_gmm
-    # to reduce live tensor count during gmm (reduces register pressure)
     drhs_dout = qpl.quantize(
         grad,
         qt_rule.bwd_qtype,
@@ -159,23 +143,26 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
         calibration_method=qt_rule.bwd_calibration_method,
         scale_dtype=jnp.float32,
     )
-    lhs_t = qpl.quantize(
-        lhs_bf16.swapaxes(0, 1),
-        qt_rule.act_qtype,
-        channelwise_axes=[0],
-        tiled_axes={1: tile_size},
-        calibration_method=qt_rule.act_calibration_method,
-        scale_dtype=jnp.float32,
+
+    dlhs = tokamax_backend.gmm(
+        lhs=dlhs_dout,
+        rhs=rhs,
+        group_sizes=group_sizes,
+        precision=jax.lax.Precision.DEFAULT,
+        out_dtype=lhs_dtype,
+        tiling=tiling[3:6] if len(tiling) >= 6 else tiling[:3],
+        group_offset=None,
+        transpose_rhs=True,
+        interpret=False,
     )
 
-    bwd_tgmm_tiling = _clamp_tiling(tiling[6:9] if len(tiling) >= 9 else tiling[:3], tile_size)
     drhs = tokamax_backend.tgmm(
         lhs=lhs_t,
         rhs=drhs_dout,
         group_sizes=group_sizes,
         precision=jax.lax.Precision.DEFAULT,
         out_dtype=rhs_dtype,
-        tiling=bwd_tgmm_tiling,
+        tiling=tiling[6:9] if len(tiling) >= 9 else tiling[:3],
         group_offset=None,
         num_actual_groups=num_actual_groups,
         interpret=False,
