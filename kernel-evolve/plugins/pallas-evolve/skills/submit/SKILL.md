@@ -119,7 +119,7 @@ kubectl label configmap ${JOB_NAME}-payload app=kernel-eval --overwrite
 Read the job template path from the config's `evaluator.job_template` (relative to repo root). Render with variable substitution and apply:
 
 ```bash
-ACTIVE_DEADLINE=$((N_VARIANTS * 300 + 300))
+ACTIVE_DEADLINE=1800
 
 python3 -c "
 import string, sys
@@ -146,7 +146,7 @@ print(rendered)
 Calculate the timeout based on variant count:
 
 ```bash
-TIMEOUT=$((N_VARIANTS * 300 + 300))
+TIMEOUT=1800
 kubectl wait --for=condition=complete --timeout=${TIMEOUT}s job/${JOB_NAME} 2>/dev/null && echo "JOB_STATUS:Complete" || \
 kubectl wait --for=condition=failed --timeout=5s job/${JOB_NAME} 2>/dev/null && echo "JOB_STATUS:Failed" || \
 echo "JOB_STATUS:Timeout"
