@@ -1,0 +1,50 @@
+kernel:
+  name: "chunk_gla"
+  template: "kernels/chunk_gla.py"
+  reference: "kernels/chunk_gla_ref.py"
+  evolve_markers:
+    start: "# EVOLVE-BLOCK-START"
+    end: "# EVOLVE-BLOCK-END"
+
+# AL model GLA dimensions:
+#   q, k, v: [B, T, H, K] = [2, 4096, 16, 128]
+#   g_gamma:  (16,)
+#   chunk_size: 64
+shapes:
+  - { B: 2, T: 4096, H: 16, K: 128, V: 128, chunk_size: 64 }
+
+correctness:
+  method: "allclose"
+  rtol: 1e-2
+  # atol on scalar loss: Pallas kernels use Precision.HIGHEST while
+  # reference uses JAX default (bfloat16 truncation on TPU), giving
+  # ~0.1/element diff that accumulates to ~8 in the sum.
+  atol: 10.0
+
+evaluator:
+  namespace: "default"
+  job_template: ".github/ci/kernel-eval-job.yaml"
+  repo: "sii-xinglong/Glaucis"
+  branch: "main"
+  poll_interval: 15
+  timeout: 600
+
+tpu:
+  cluster: "tpu7x-cluster"
+  zone: "us-central1"
+
+batch:
+  variants_per_round: 5
+  top_k: 2
+  max_active_lineages: 4
+  diversity_directions:
+    - tiling_strategy
+    - hbm_compute_overlap
+    - mxu_vpu_overlap
+    - memory_layout
+    - mxu_utilization
+    - vectorization
+
+session:
+  max_iterations: 20
+  output_dir: "runs/chunk_gla"
