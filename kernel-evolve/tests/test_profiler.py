@@ -542,3 +542,78 @@ def test_analyze_special_units_multiple():
 def test_analyze_special_units_no_special():
   result = analyze_special_units("plain instructions only")
   assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: compute_derived_metrics – HBM bandwidth utilization
+# ---------------------------------------------------------------------------
+
+
+def test_compute_derived_metrics_hbm_bw_util():
+    flops = 134217728.0
+    hbm_bytes = 16777216
+    latency_ms = 0.5
+    result = compute_derived_metrics(flops, hbm_bytes, latency_ms)
+    assert result["hbm_bandwidth_utilization_pct"] is not None
+    assert result["hbm_bandwidth_utilization_pct"] == pytest.approx(
+        (16777216 / 0.0005) / 3690e9 * 100.0
+    )
+
+
+def test_compute_derived_metrics_hbm_bw_util_missing():
+    result = compute_derived_metrics(None, None, 0.5)
+    assert result["hbm_bandwidth_utilization_pct"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: analyze_ir_dumps – extended metrics integration
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_ir_dumps_extended_metrics(tmp_path):
+    llo_dir = tmp_path / "llo"
+    llo_dir.mkdir()
+    llo_text = """\
+#allocation0 = f32[262144], size=0x100000
+#allocation1 = u8[512], space=smem, size=0x200
+;;
+%v0 = vmatmul.mubr.bf16.gmra.mxu0 %r0
+%v1 = vmax.xlane.f32.xlu0 %r1
+;;
+%v2 = dma.hbm_to_vmem %r2
+%v3 = vpow2.f32 %r3
+;;
+"""
+    (llo_dir / "module.pass_79.llo").write_text(llo_text)
+    hlo_dir = tmp_path / "hlo"
+    hlo_dir.mkdir()
+    hlo_text = """\
+HloModule test
+fused_computation.1 { ROOT %r = f32[1] parameter(0) }
+fused_computation.2 { ROOT %r = f32[1] parameter(0) }
+ENTRY main {
+  %p0 = bf16[8,2048,128] parameter(0)
+  %copy-start = bf16[8,2048,128] copy-start(%p0), cross_program_prefetch_index=0
+  ROOT %out = bf16[8,2048,128] custom-call(%p0), custom_call_target="tpu_custom_call"
+}
+"""
+    (hlo_dir / "module.after_all_optimizations.txt").write_text(hlo_text)
+    result = analyze_ir_dumps(str(hlo_dir), str(llo_dir))
+
+    # Existing metrics still present
+    assert result["vliw_bundle_count"] == 3
+    assert result["mxu_utilization"] is not None
+
+    # New metrics
+    assert result["vmem_allocation"]["vmem_bytes"] == 0x100000
+    assert result["vmem_allocation"]["smem_bytes"] == 0x200
+    # First segment has only #allocation lines (no %var = ops), so 2 bundles with ops
+    assert result["bundle_density"]["total_bundles"] == 2
+    assert result["bundle_density"]["max_ops_per_bundle"] == 2
+    assert result["dma_analysis"]["dma_count"] == 1
+    assert result["dma_analysis"]["double_buffering"] is False
+    assert result["fusion_analysis"]["fusion_count"] == 2
+    assert result["fusion_analysis"]["has_cross_program_prefetch"] is True
+    assert result["special_units"]["xlane_ops"] == 1
+    assert result["special_units"]["eup_ops"] == 1
+    assert result["special_units"]["nop_count"] == 0
