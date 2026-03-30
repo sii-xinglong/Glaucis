@@ -284,6 +284,10 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
   _setup_dump_env(). This function only parses the dump files that were
   generated during earlier stages.
 
+  For FLOPs: Pallas GMM matmuls are inside tpu_custom_call and invisible
+  to HLO dot-pattern parsing. FLOPs are computed from the eval shapes
+  directly (fwd + bwd_gmm + tgmm = 3 matmuls per shape).
+
   Self-contained — does NOT import from kernel_evolve.profiler.
   Non-fatal: returns ok=False on failure without stopping the evaluation pipeline.
   """
@@ -305,6 +309,23 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     dump_path = Path(dump_dir)
     hlo_dir = dump_path / "hlo"
     llo_dir = dump_path / "llo"
+
+    # ── Compute FLOPs from eval shapes ──────────────────────────────
+    # GMM fwd+bwd has 3 matmul passes per shape:
+    #   fwd:      lhs[M,K] @ rhs[G,K,N] -> [M,N]   => 2*M*K*N*G
+    #   bwd_gmm:  dlhs_dout[M,N] @ rhs[G,K,N]^T     => 2*M*N*K*G
+    #   tgmm:     lhs_t[K,M] @ drhs_dout[M,N]        => 2*K*M*N*G
+    # Total per shape: 6 * M * K * N * G
+    # Only the first shape is benchmarked for performance.
+    flops = None
+    if shapes:
+      s = shapes[0]
+      M = s.get("M", 0)
+      K = s.get("K", 0)
+      N = s.get("N", 0)
+      G = s.get("G", 1)
+      if M and K and N:
+        flops = 6.0 * M * K * N * G
 
     # ── Parse LLO dumps ──────────────────────────────────────────────
     vliw_bundle_count = None
@@ -355,9 +376,8 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
         },
       }
 
-    # ── Parse HLO dumps ──────────────────────────────────────────────
+    # ── Parse HLO dumps (for HBM bandwidth) ────────────────────────
     hbm_bytes = None
-    flops = None
 
     hlo_files = glob.glob(str(hlo_dir / "**" / "*.txt"), recursive=True)
     hlo_files += glob.glob(str(hlo_dir / "**" / "*.hlo"), recursive=True)
@@ -402,28 +422,6 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
                 elems *= int(d)
               hbm_bytes += elems * _DTYPE_BYTES[inp_m.group(1)]
 
-      # Extract FLOPs from dot operations (including contracting dims)
-      dot_pat = re.compile(
-        r"\w+\[([\d,]+)\]\s+"  # output shape
-        r"dot\(\s*\w+\[([\d,]+)\]\s+%\S+\s*,"  # lhs shape
-        r"\s*\w+\[([\d,]+)\]\s+%\S+\s*\)"  # rhs shape
-        r"\s*,\s*lhs_contracting_dims=\{([\d,]+)\}"  # contracting dims
-      )
-      for match in dot_pat.finditer(hlo_text):
-        if flops is None:
-          flops = 0.0
-        out_dims = [int(d) for d in match.group(1).split(",")]
-        lhs_dims = [int(d) for d in match.group(2).split(",")]
-        contract_indices = [int(d) for d in match.group(4).split(",")]
-        out_size = 1
-        for d in out_dims:
-          out_size *= d
-        contract_size = 1
-        for i in contract_indices:
-          if i < len(lhs_dims):
-            contract_size *= lhs_dims[i]
-        flops += 2.0 * out_size * contract_size
-
     arithmetic_intensity = (
       flops / hbm_bytes if flops and hbm_bytes else None
     )
@@ -462,7 +460,9 @@ def _setup_dump_env():
     f"--xla_jf_dump_to={_DUMP_DIR}/llo "
     "--xla_jf_dump_hlo_text=true "
     "--xla_jf_dump_llo_text=true "
+    "--xla_jf_emit_annotations=true "
     f"--xla_mosaic_dump_to={_DUMP_DIR}/mosaic "
+    "--xla_mosaic_enable_llo_source_annotations=true "
     + os.environ.get("LIBTPU_INIT_ARGS", "")
   )
 
