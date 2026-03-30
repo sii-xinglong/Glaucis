@@ -133,6 +133,57 @@ def stage_performance(exec_globals, shapes, warmup=10, iters=50):
     return {"ok": False, "error": f"Performance error: {traceback.format_exc()}"}
 
 
+def parse_hw_utilization(events, tpu_pid):
+  """Extract per-hardware-unit utilization from xprof counter events.
+
+  The _counters_ thread (tid=0xFFFFFFFF) contains time-windowed utilization
+  percentages for MXU, Scalar ALU, Vector ALU, Vector Load/Store, Vector EUP,
+  plus absolute fill/spill counts. Returns a dict of time-weighted averages
+  or None if no counter events are found.
+  """
+  COUNTER_TID = 4294967295  # 0xFFFFFFFF, _counters_ thread
+  UTIL_UNITS = {
+    "MXU": "mxu_util_pct",
+    "Vector ALU": "vector_alu_util_pct",
+    "Scalar ALU": "scalar_alu_util_pct",
+    "Vector Load": "vector_load_util_pct",
+    "Vector Store": "vector_store_util_pct",
+    "Vector EUP": "vector_eup_util_pct",
+  }
+  COUNTER_UNITS = {
+    "Vector Fills": ("vector_fills", "fills"),
+    "Vector Spills": ("vector_spills", "spills"),
+  }
+
+  counter_events = [
+    e for e in events
+    if e.get("pid") == tpu_pid and e.get("tid") == COUNTER_TID and "dur" in e
+  ]
+  if not counter_events:
+    return None
+
+  result = {}
+  for xprof_name, key in UTIL_UNITS.items():
+    weighted_sum = 0.0
+    total_dur = 0.0
+    for e in counter_events:
+      if e.get("name") == xprof_name:
+        dur = e["dur"]
+        util = float(e.get("args", {}).get("% util", 0))
+        weighted_sum += util * dur
+        total_dur += dur
+    result[key] = weighted_sum / total_dur if total_dur > 0 else 0.0
+
+  for xprof_name, (key, arg_key) in COUNTER_UNITS.items():
+    total = 0
+    for e in counter_events:
+      if e.get("name") == xprof_name:
+        total += int(e.get("args", {}).get(arg_key, 0))
+    result[key] = total
+
+  return result
+
+
 def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
   """Stage 4: Profile kernel using JAX profiler and xprof trace analysis.
 
@@ -285,6 +336,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       return {"ok": False, "error": "Invalid trace timing (total_time <= 0)"}
 
     ratio = sync_wait_total / total_time
+    hw_utilization = parse_hw_utilization(events, pid)
     diag = {
       "process_names": {str(k): v for k, v in process_names.items()},
       "selected_pid": pid,
@@ -300,6 +352,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       "ok": True,
       "compute_ratio": 1.0 - ratio,
       "memory_transfer_ratio": ratio,
+      "hw_utilization": hw_utilization,
       "diagnostics": diag,
       "_trace_events_path": trace_events_path,
     }
@@ -700,10 +753,12 @@ def main():
 
   compute_ratio = None
   memory_transfer_ratio = None
+  hw_utilization = None
   profile_diag = {}
   if profile_result["ok"]:
     compute_ratio = profile_result["compute_ratio"]
     memory_transfer_ratio = profile_result["memory_transfer_ratio"]
+    hw_utilization = profile_result.get("hw_utilization")
     profile_diag = profile_result.get("diagnostics", {})
   else:
     profile_diag = {"error": profile_result.get("error", "unknown")}
@@ -763,6 +818,7 @@ def main():
       "reference_latency_ms": ref_latency,
       "reference_perf_ok": ref_perf.get("ok", False),
       "profile_diagnostics": profile_diag,
+      "hw_utilization": hw_utilization,
       "profile": clean_deep_profile,
       **({"artifacts_gcs_prefix": gcs_result["gcs_prefix"]} if gcs_result.get("ok") else {}),
     },

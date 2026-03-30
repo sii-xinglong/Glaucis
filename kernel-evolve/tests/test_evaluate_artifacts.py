@@ -381,3 +381,74 @@ ENTRY main {
     assert result["special_units"]["xlane_ops"] == 1
     assert result["special_units"]["eup_ops"] == 1
     assert result["special_units"]["nop_count"] == 1
+
+
+# ── parse_hw_utilization tests ──
+
+
+def _make_counter_event(pid, name, dur, args):
+  """Helper: build a Chrome trace counter event."""
+  return {"pid": pid, "tid": 4294967295, "ph": "X", "name": name, "dur": dur, "args": args}
+
+
+def test_parse_hw_utilization_basic():
+  """Weighted average across two equal-duration MXU windows, plus fills/spills."""
+  from evaluate import parse_hw_utilization
+
+  TPU_PID = 3
+  events = [
+    # Two MXU windows with equal duration
+    _make_counter_event(TPU_PID, "MXU", 100, {"% util": "20.0"}),
+    _make_counter_event(TPU_PID, "MXU", 100, {"% util": "40.0"}),
+    # One Vector ALU window
+    _make_counter_event(TPU_PID, "Vector ALU", 100, {"% util": "10.0"}),
+    # Fills and spills
+    _make_counter_event(TPU_PID, "Vector Fills", 100, {"fills": "5"}),
+    _make_counter_event(TPU_PID, "Vector Fills", 100, {"fills": "3"}),
+    _make_counter_event(TPU_PID, "Vector Spills", 100, {"spills": "0"}),
+    # Non-counter event (different tid) — should be ignored
+    {"pid": TPU_PID, "tid": 8, "ph": "X", "name": "MXU", "dur": 100, "args": {"% util": "99"}},
+  ]
+  result = parse_hw_utilization(events, TPU_PID)
+  assert result is not None
+  assert result["mxu_util_pct"] == 30.0
+  assert result["vector_alu_util_pct"] == 10.0
+  assert result["scalar_alu_util_pct"] == 0.0
+  assert result["vector_fills"] == 8
+  assert result["vector_spills"] == 0
+
+
+def test_parse_hw_utilization_no_counters():
+  """Returns None when no counter events present."""
+  from evaluate import parse_hw_utilization
+
+  events = [
+    {"pid": 3, "tid": 8, "ph": "X", "name": "tpu_custom_call", "dur": 100},
+  ]
+  assert parse_hw_utilization(events, 3) is None
+
+
+def test_parse_hw_utilization_ignores_other_pids():
+  """Only events matching tpu_pid are used."""
+  from evaluate import parse_hw_utilization
+
+  events = [
+    _make_counter_event(999, "MXU", 100, {"% util": "90.0"}),  # wrong pid
+    _make_counter_event(1, "MXU", 100, {"% util": "10.0"}),    # correct pid
+  ]
+  result = parse_hw_utilization(events, tpu_pid=1)
+  assert result is not None
+  assert result["mxu_util_pct"] == 10.0
+
+
+def test_parse_hw_utilization_weighted_average():
+  """Unequal durations produce correct time-weighted average, not simple mean."""
+  from evaluate import parse_hw_utilization
+
+  events = [
+    _make_counter_event(3, "MXU", 50, {"% util": "80.0"}),
+    _make_counter_event(3, "MXU", 150, {"% util": "20.0"}),
+  ]
+  result = parse_hw_utilization(events, 3)
+  # weighted: (80*50 + 20*150) / 200 = 35.0, not simple mean 50.0
+  assert result["mxu_util_pct"] == 35.0
