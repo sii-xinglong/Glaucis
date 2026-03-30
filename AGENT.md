@@ -28,7 +28,7 @@
 
 ### SO3: Deferred lhs_t quantization (1.583x speedup)
 - **What**: Move `lhs_t = qpl.quantize(lhs_bf16.swapaxes(0, 1), ...)` from forward to backward. Store `lhs_bf16` in residuals instead of pre-quantized `lhs_t`.
-- **Why**: Forward pass is on the critical path. Removing one quantize call from forward reduces forward latency. The backward pass already has grad quantization overhead, so the deferred quantize overlaps with existing backward work.
+- **Why**: Forward pass is on the critical path. Removing one quantize call from forward reduces forward latency. Backward latency does not increase because `lhs_t` quantization (absmax + scale + cast, pure VPU/SFU vector ops) has no data dependency on `dlhs = gmm(dlhs_dout, rhs)` (MXU matmul), so XLA schedules them in parallel on different hardware units. The quantize is fully hidden behind the gmm compute.
 - **Impact**: 1.583x speedup (6.32ms vs 10.00ms). +20.8% over SO2.
 - **Trade-off**: Residuals store bf16 tensor (larger than fp8 quantized), increasing memory pressure slightly. Net effect is still strongly positive.
 - **Rule**: Consider deferring non-critical quantization from forward to backward when forward latency is the bottleneck.
