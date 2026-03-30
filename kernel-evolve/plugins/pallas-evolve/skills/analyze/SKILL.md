@@ -1,21 +1,23 @@
 ---
 name: analyze
-description: Use when analyzing TPU kernel evaluation results — parses eval_result.json, classifies bottlenecks, compares with history, writes analysis.md
+description: Use when analyzing batch TPU kernel evaluation results — compares N variants, classifies bottlenecks, selects top-K, updates lineages.json, writes batch_analysis.md
 ---
 
-# Analyze Evaluation Results
+# Analyze Batch Evaluation Results
 
-Parse the evaluation result from a TPU kernel run, classify performance bottlenecks, compare with previous iterations, and write a structured analysis.
+Parse evaluation results from all variants in a batch, classify performance bottlenecks per variant, build a comparative ranking, select top-K for the next round, update lineage tracking, and write structured outputs.
 
 ## Context
 
-Invoked by `pallas-evolve:start` after `pallas-evolve:submit`, or standalone for debugging. Expects `iteration_{N}/eval_result.json` to exist in the run directory.
+Invoked by `pallas-evolve:start` after `pallas-evolve:submit` completes all variant evaluations for a round. Expects `iteration_{N}/variants/{variant_name}/eval_result.json` files to exist in the run directory, one per variant.
 
 ## Procedure
 
-### Step 1: Read eval result
+### Step 1: Read all results
 
-Read `iteration_{N}/eval_result.json`. The JSON has this structure:
+Glob `iteration_{N}/variants/*/eval_result.json` within the run directory. Parse each JSON file.
+
+Each `eval_result.json` has this structure:
 
 ```json
 {
@@ -48,53 +50,73 @@ Read `iteration_{N}/eval_result.json`. The JSON has this structure:
 }
 ```
 
-### Step 2: Classify result
+Extract the variant name from the directory path (the directory name under `variants/`).
+
+### Step 2: Per-variant analysis
+
+For each variant, classify status and analyze performance:
 
 **If status is COMPILE_ERROR:**
-- Report the error message
+- Record the error message
 - Identify the likely cause:
-  - `SyntaxError` → Python syntax issue in kernel code
-  - `TypeError` / `ValueError` → Wrong argument types or shapes
-  - `Mosaic` or `MLIR` in error → TPU compiler issue (likely dtype or API misuse)
-  - `ResourceExhausted` → VMEM/memory overflow (block size too large)
-- Suggest specific fix based on the error
-- Write to analysis.md and return
+  - `SyntaxError` -> Python syntax issue in kernel code
+  - `TypeError` / `ValueError` -> Wrong argument types or shapes
+  - `Mosaic` or `MLIR` in error -> TPU compiler issue (likely dtype or API misuse)
+  - `ResourceExhausted` -> VMEM/memory overflow (block size too large)
+- Note specific fix suggestion
 
 **If status is INCORRECT:**
-- Report `max_diff` (maximum absolute difference from reference)
+- Record `max_diff` (maximum absolute difference from reference)
 - Compare with correctness thresholds (`rtol`, `atol` from config)
 - Common causes: integer overflow, wrong accumulator dtype, incorrect tiling boundaries
-- Write to analysis.md and return
 
 **If status is SUCCESS:**
-- Proceed to performance analysis (Step 3)
+- Extract primary metrics:
+  - `speedup`: ratio of reference_latency / kernel_latency. >1.0 means faster than baseline.
+  - `latency_ms`: absolute kernel latency
+  - `compute_ratio`: fraction of time in useful computation (0.0-1.0). Higher is better.
+  - `memory_transfer_ratio`: fraction of time in SyncWait/DMA (0.0-1.0). Lower is better.
 
-### Step 3: Performance analysis (SUCCESS only)
+- Extract deep profiling metrics from `metadata.profile` (may be absent if profiling failed):
+  - `vliw_bundle_count`: total VLIW bundles in the compiled kernel. Lower = simpler/faster.
+  - `mxu_utilization.dual_ratio`: how evenly both MXUs are used (0.0-1.0). 1.0 = perfect.
+  - `hbm_bandwidth_bytes`: total HBM bytes read + written per invocation.
+  - `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
+  - `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
 
-Extract primary metrics:
-- `speedup`: ratio of reference_latency / kernel_latency. >1.0 means faster than baseline.
-- `latency_ms`: absolute kernel latency
-- `compute_ratio`: fraction of time in useful computation (0.0-1.0). Higher is better.
-- `memory_transfer_ratio`: fraction of time in SyncWait/DMA (0.0-1.0). Lower is better.
+- **Multi-signal bottleneck classification:**
 
-Extract deep profiling metrics from `metadata.profile` (may be absent if profiling failed):
-- `vliw_bundle_count`: total VLIW bundles in the compiled kernel. Lower = simpler/faster.
-- `mxu_utilization.dual_ratio`: how evenly both MXUs are used (0.0-1.0). 1.0 = perfect.
-- `hbm_bandwidth_bytes`: total HBM bytes read + written per invocation.
-- `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
-- `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
-- `hbm_bandwidth_utilization_pct`: actual HBM bandwidth / peak bandwidth as percentage. >80% = near bandwidth ceiling.
-- `vmem_allocation.vmem_bytes`: total on-chip VMEM allocated. High values indicate VMEM pressure.
-- `bundle_density.avg_ops_per_bundle`: average operations per VLIW bundle. Higher = better ILP. <2.0 = poor slot utilization.
-- `bundle_density.max_ops_per_bundle`: peak ILP achieved. TPU v7x can do up to 8 ops/bundle.
-- `dma_analysis.dma_count`: total DMA transfer operations. High count may indicate excessive data movement.
-- `dma_analysis.double_buffering`: whether the kernel uses double buffering (iteration % 2 buffer slots). False = DMA cannot overlap with compute.
-- `fusion_analysis.fusion_count`: number of XLA fused_computation blocks. More fusions = more HBM round-trips. Pallas kernels should have 0.
-- `special_units.xlane_ops`: cross-lane reduction operations (XLU). Used for max/sum reductions.
-- `special_units.eup_ops`: hardware exponential unit operations. Used for exp() via vpow2.
-- `special_units.nop_count`: empty VLIW slots. High count indicates pipeline bubbles.
+  Extract deep profiling metrics from `metadata.profile` (may be absent if profiling failed):
+  - `vliw_bundle_count`: total VLIW bundles in the compiled kernel. Lower = simpler/faster.
+  - `mxu_utilization.dual_ratio`: how evenly both MXUs are used (0.0-1.0). 1.0 = perfect.
+  - `hbm_bandwidth_bytes`: total HBM bytes read + written per invocation.
+  - `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
+  - `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
+  - `hbm_bandwidth_utilization_pct`: actual HBM bandwidth / peak bandwidth as percentage. >80% = near bandwidth ceiling.
+  - `vmem_allocation.vmem_bytes`: total on-chip VMEM allocated. High values indicate VMEM pressure.
+  - `bundle_density.avg_ops_per_bundle`: average operations per VLIW bundle. Higher = better ILP. <2.0 = poor slot utilization.
+  - `bundle_density.max_ops_per_bundle`: peak ILP achieved. TPU v7x can do up to 8 ops/bundle.
+  - `dma_analysis.dma_count`: total DMA transfer operations. High count may indicate excessive data movement.
+  - `dma_analysis.double_buffering`: whether the kernel uses double buffering (iteration % 2 buffer slots). False = DMA cannot overlap with compute.
+  - `fusion_analysis.fusion_count`: number of XLA fused_computation blocks. More fusions = more HBM round-trips. Pallas kernels should have 0.
+  - `special_units.xlane_ops`: cross-lane reduction operations (XLU). Used for max/sum reductions.
+  - `special_units.eup_ops`: hardware exponential unit operations. Used for exp() via vpow2.
+  - `special_units.nop_count`: empty VLIW slots. High count indicates pipeline bubbles.
 
-**Multi-signal bottleneck classification:**
+  | Signal | Threshold | Diagnosis |
+  |--------|-----------|-----------|
+  | `compute_ratio < 0.50` | -- | Memory-bound: VPU stalling on DMA/SyncWait |
+  | `compute_ratio >= 0.75` | -- | Compute-bound: VPU busy, optimize ALU ops |
+  | `arithmetic_intensity < 10` | -- | Low arithmetic intensity: too much HBM traffic per FLOP |
+  | `dual_ratio < 0.5` | -- | Single-MXU: only one MXU active, matmul dims may be wrong |
+  | `compute_efficiency_pct < 10` | -- | Very far from peak: major pipeline stalls or register spills |
+  | `vliw_bundle_count increasing` | vs prior round's best | Complexity bloat: kernel getting more complex without speedup |
+
+- **Combined diagnosis patterns:**
+  - **Low arithmetic_intensity + high compute_ratio** -> Compute-bound but under-utilizing memory bandwidth. Consider larger tiles or prefetching.
+  - **Low dual_ratio + compute-bound** -> Only one MXU active. Check if matmul dimensions are multiples of 128 for dual-MXU scheduling.
+  - **Growing vliw_bundle_count + flat speedup** -> Kernel complexity bloat. Simplify the algorithm.
+  - **Low compute_efficiency_pct + high compute_ratio** -> Near-peak VPU util but far from peak FLOPS. Check for unnecessary recomputation or register pressure.
 
 | Signal | Threshold | Diagnosis |
 |--------|-----------|-----------|
@@ -110,52 +132,138 @@ Extract deep profiling metrics from `metadata.profile` (may be absent if profili
 | `nop_count > 50` | — | Pipeline bubbles: compiler couldn't fill VLIW slots with useful work |
 | `hbm_bandwidth_utilization_pct > 80` | — | Near HBM bandwidth ceiling: memory-bound, reduce data movement |
 
-**Combined diagnosis patterns:**
-- **Low arithmetic_intensity + high compute_ratio** → Compute-bound but under-utilizing memory bandwidth. Consider larger tiles or prefetching.
-- **Low dual_ratio + compute-bound** → Only one MXU active. Check if matmul dimensions are multiples of 128 for dual-MXU scheduling.
-- **Growing vliw_bundle_count + flat speedup** → Kernel complexity bloat. Simplify the algorithm.
-- **Low compute_efficiency_pct + high compute_ratio** → Near-peak VPU util but far from peak FLOPS. Check for unnecessary recomputation or register pressure.
+- Determine a mutation `direction` label for this variant (e.g., `tiling_strategy`, `block_size`, `k_tiling`, `pipelining`, `mxu_scheduling`, `scratch_memory`, etc.) from the variant's strategy.md or directory name.
 
-### Step 3b: Deep IR analysis (if available)
+### Step 3: Comparative analysis
 
-Check if raw profile artifacts were downloaded to the iteration directory. These provide much richer optimization signals than the scalar metrics alone.
+Build a comparison table ranking all variants:
 
-**HLO IR (`iteration_{N}/hlo_post_opt.txt`)**
+```markdown
+| Rank | Variant | Status | Speedup | Latency (ms) | Compute Ratio | Bottleneck | Direction |
+|------|---------|--------|---------|--------------|---------------|------------|-----------|
+| 1    | k_tile  | SUCCESS | 1.82   | 1.89         | 0.78          | compute    | k_tiling  |
+| 2    | big_blk | SUCCESS | 1.45   | 2.38         | 0.62          | balanced   | block_size|
+| --   | vec128  | COMPILE_ERROR | -- | --          | --            | --         | vectorize |
+```
+
+- Rank SUCCESS variants by speedup descending.
+- Place failed variants (COMPILE_ERROR, INCORRECT) below the ranked successes, unranked.
+
+### Step 4: Top-K selection
+
+Select the best variants to continue as lineages:
+
+1. Read `batch.top_k` and `batch.max_active_lineages` from the run config (config.yaml) or from `lineages.json` metadata if present. If not configured, default to `top_k = 3` and `max_active_lineages = 5`.
+2. Filter to SUCCESS results only.
+3. Sort by speedup descending.
+4. Take the top K variants. If fewer than K successes exist, take all successes.
+5. Record which variants were selected and which were pruned.
+
+### Step 5: Update lineages.json
+
+Read the current `lineages.json` from the run directory. If it does not exist yet, treat this as Round 1.
+
+**Round 1** (lineages list is empty or file does not exist):
+
+- Create a new lineage entry for each selected variant:
+  ```json
+  {
+    "id": "L1",
+    "parent": null,
+    "best_speedup": 1.5,
+    "best_kernel": "iteration_1/variants/tiling/kernel.py",
+    "direction": "tiling_strategy",
+    "history": ["iter-1-tiling"],
+    "stagnant_rounds": 0
+  }
+  ```
+- Assign sequential IDs: L1, L2, L3, ...
+- Add unselected variants to the `pruned` list in lineages.json with their final metrics.
+- Set `round` to 1.
+
+**Round 2+** (lineages list is non-empty):
+
+- For each existing active lineage, find its corresponding new variant(s) (matched by lineage ID from variant metadata or directory naming convention).
+- If a lineage's new variant improved over its `best_speedup`:
+  - Update `best_speedup` to the new value
+  - Update `best_kernel` to the new kernel path
+  - Append to `history` (e.g., `"iter-3-k_tile"`)
+  - Reset `stagnant_rounds` to 0
+- If the lineage's variant did not improve (or failed):
+  - Increment `stagnant_rounds` by 1
+- If new lineages were spawned (e.g., from exploration variants), add them with fresh entries.
+- Enforce `max_active_lineages`:
+  - If total active lineages exceeds the limit, prune lineages with the highest `stagnant_rounds` first (ties broken by lowest `best_speedup`).
+  - Move pruned lineages to the `pruned` list.
+- Increment `round`.
+
+Write the updated `lineages.json` back to the run directory. The full structure:
+
+```json
+{
+  "round": 2,
+  "config": {
+    "top_k": 3,
+    "max_active_lineages": 5
+  },
+  "lineages": [
+    {
+      "id": "L1",
+      "parent": null,
+      "best_speedup": 1.82,
+      "best_kernel": "iteration_2/variants/k_tile_v2/kernel.py",
+      "direction": "k_tiling",
+      "history": ["iter-1-k_tile", "iter-2-k_tile_v2"],
+      "stagnant_rounds": 0
+    }
+  ],
+  "pruned": [
+    {
+      "id": "L3",
+      "best_speedup": 1.05,
+      "direction": "vectorize",
+      "pruned_at_round": 2,
+      "reason": "stagnant_3_rounds"
+    }
+  ]
+}
+```
+
+### Step 6: Deep IR analysis (if artifacts available)
+
+Check if raw profile artifacts were downloaded for any successful variants. Apply this analysis to the **best variant** (highest speedup) or all successful variants if there are few enough to examine.
+
+**HLO IR (`iteration_{N}/variants/{name}/hlo_post_opt.txt`)**
 
 If this file exists, read it and analyze:
-
 - **Fusion decisions**: Which ops were fused into the `tpu_custom_call`? Were any ops left unfused that could benefit from fusion?
 - **Memory layout**: Are there unnecessary transposes, copies, or layout conversions? Check for `transpose`, `copy`, or `bitcast` ops outside the fused region.
 - **Parameter shapes**: Verify that the tiling dimensions visible in HLO match the Pallas `BlockSpec` grid. Mismatches indicate suboptimal tiling.
 - **Constant folding**: Are there constants that could be folded at compile time but weren't?
 - **Redundant ops**: Look for `broadcast`, `reshape`, or `slice` chains that suggest the compiler couldn't simplify the data flow.
 
-**LLO IR (`iteration_{N}/llo_final.txt`)**
+**LLO IR (`iteration_{N}/variants/{name}/llo_final.txt`)**
 
 If this file exists, read it and analyze:
-
 - **VLIW bundle density**: Are bundles densely packed (3-4 ops per `;;` block) or mostly single-op? Dense bundles mean the compiler is effectively utilizing instruction-level parallelism.
-- **MXU scheduling**: Where are `.mxu0`/`.mxu1` ops placed? Long gaps between MXU ops suggest pipeline bubbles. Consecutive MXU ops on both ports (`.mxu0` and `.mxu1` in the same bundle) indicate dual-MXU scheduling.
+- **MXU scheduling**: Where are `.mxu0`/`.mxu1` ops placed? Long gaps between MXU ops suggest pipeline bubbles. Consecutive MXU ops on both ports in the same bundle indicate dual-MXU scheduling.
 - **Pipeline stalls**: Look for `nop` instructions or `wait` barriers. Multiple `nop`s in sequence indicate the compiler couldn't fill the pipeline.
-- **Register pressure**: Look for store/load patterns to VMEM (`.vmem_store` followed later by `.vmem_load` of the same address) — these indicate register spills.
+- **Register pressure**: Look for store/load patterns to VMEM (`.vmem_store` followed later by `.vmem_load` of the same address) -- these indicate register spills.
 - **DMA scheduling**: Check for `dma.start` and `dma.done` pairs. Good pipelining has `dma.start` well ahead of the corresponding `dma.done`, overlapping with computation.
 
-**Trace Events (`iteration_{N}/trace_events.json`)**
+**Trace Events (`iteration_{N}/variants/{name}/trace_events.json`)**
 
-If this file exists, read it (it may be large — focus on events with `dur > 0` on the TPU device pid) and analyze:
-
+If this file exists, read it (it may be large -- focus on events with `dur > 0` on the TPU device pid) and analyze:
 - **Event distribution**: What types of events dominate? Group by `name` and sum durations.
 - **Compute vs sync gaps**: Look for long `SyncWait` events between computation events. These represent times the TPU is idle waiting for data.
 - **DMA overlap**: Are there DMA transfer events running concurrently with computation events (overlapping `ts` + `dur` ranges)?
 - **Iteration consistency**: Are the 3 profiled iterations similar in timing, or is there variance suggesting cold-start effects?
 
-**Include IR-based findings in the analysis.md output.** When IR analysis reveals something the scalar metrics missed (e.g., register spills, missed fusions, pipeline bubbles), highlight it as a concrete optimization target with specific suggestions.
+Include IR-based findings in the batch_analysis.md output. When IR analysis reveals something the scalar metrics missed (e.g., register spills, missed fusions, pipeline bubbles), highlight it as a concrete optimization target with specific suggestions.
 
-### Step 4: Trend analysis
+### Step 7: Trend analysis
 
-Read previous iteration results (if any) from `iteration_{N-1}/eval_result.json`, `iteration_{N-2}/eval_result.json`, etc.
-
-Track these metrics across iterations:
+If this is Round 2+, track per-lineage metrics across rounds. Read previous round results from earlier iteration directories.
 
 | Metric | Good trend | Bad trend |
 |--------|-----------|-----------|
@@ -166,16 +274,115 @@ Track these metrics across iterations:
 | `arithmetic_intensity` | Increasing | Decreasing (more memory traffic) |
 | `compute_efficiency_pct` | Increasing | Decreasing |
 
-Flag any regressions (speedup decreased from previous iteration).
+Flag per-lineage:
+- **Regressions**: speedup decreased from previous round for this lineage
+- **Stagnation**: lineage has not improved for 2+ rounds (`stagnant_rounds >= 2`)
+- **"All-cost improvement"**: speedup improved but bundle count doubled -- likely unsustainable
+- **"Diminishing returns"**: each round yields <2% improvement -- consider a different direction
+- **"MXU regression"**: dual_ratio dropped after a code change -- the change broke MXU scheduling
 
-Detect concerning patterns:
-- **"All-cost improvement"**: speedup improved but bundle count doubled — likely unsustainable
-- **"Diminishing returns"**: each iteration yields <2% improvement — consider trying a different approach
-- **"MXU regression"**: dual_ratio dropped after a code change — the change broke MXU scheduling
+### Step 8: Write outputs
 
-### Step 5: Generate optimization suggestions
+Write two output files:
 
-Based on the multi-signal analysis, suggest next steps:
+**`iteration_{N}/batch_analysis.md`** -- the main analysis report:
+
+```markdown
+## Round {N} Batch Analysis
+
+**Variants evaluated**: {total_count}
+**Successes**: {success_count} | **Failures**: {failure_count}
+**Best speedup this round**: {best_speedup}x ({variant_name})
+**Overall best speedup**: {overall_best}x (lineage {lineage_id})
+
+### Comparative Ranking
+
+| Rank | Variant | Status | Speedup | Latency (ms) | Compute Ratio | Bottleneck | Direction |
+|------|---------|--------|---------|--------------|---------------|------------|-----------|
+| ...  | ...     | ...    | ...     | ...          | ...           | ...        | ...       |
+
+### Per-Variant Details
+
+#### {variant_name} (Rank 1)
+
+**Status**: SUCCESS
+**Speedup**: {speedup}x
+**Latency**: {latency_ms}ms
+**Lineage**: {lineage_id} (round {round_in_lineage})
+
+| Metric | Value | Assessment |
+|--------|-------|------------|
+| compute_ratio | {compute_ratio} | {memory-bound/balanced/compute-bound} |
+| vliw_bundle_count | {vliw_bundle_count} | {vs previous: +/-N} |
+| MXU dual_ratio | {dual_ratio} | {poor/fair/good/excellent} |
+| arithmetic_intensity | {arithmetic_intensity} | {low/medium/high} |
+| compute_efficiency | {compute_efficiency_pct}% | {vs peak FLOPS} |
+| HBM bandwidth | {hbm_bandwidth_bytes} bytes | {comparison to optimal} |
+| HBM BW utilization | {hbm_bandwidth_utilization_pct}% | {near ceiling / headroom} |
+| VMEM allocated | {vmem_allocation.vmem_bytes} bytes | {pressure level} |
+| Bundle density (avg) | {avg_ops_per_bundle} ops/bundle | {poor/fair/good} |
+| DMA transfers | {dma_count} ({double_buffering ? "double-buffered" : "single-buffered"}) | {assessment} |
+| Pipeline NOPs | {nop_count} | {low/concerning/high} |
+| HLO fusions | {fusion_count} | {0 = ideal for Pallas} |
+
+**Bottleneck**: {Multi-signal diagnosis}
+**Suggestions**: {Specific optimization suggestions}
+
+#### {variant_name} (COMPILE_ERROR)
+
+**Error**: {error_message}
+**Cause**: {diagnosed cause}
+**Fix**: {suggested fix}
+
+(Repeat for each variant)
+
+### Failed Variants Summary
+
+{Table or list of failed variants with error categories and suggested fixes}
+
+### Lineage Trends (Round 2+)
+
+{Per-lineage trend analysis across rounds -- improvements, regressions, stagnation}
+
+### IR Analysis (if available)
+
+{Specific findings from HLO/LLO/trace for the best variant(s)}
+```
+
+**`iteration_{N}/selection.md`** -- top-K selection rationale:
+
+```markdown
+## Round {N} Selection
+
+### Selected (Top-K)
+
+| Lineage | Variant | Speedup | Direction | Rationale |
+|---------|---------|---------|-----------|-----------|
+| L1      | k_tile  | 1.82x   | k_tiling  | Best speedup, improving trend |
+| L2      | big_blk | 1.45x   | block_size| New direction, promising |
+
+### Not Selected
+
+| Variant | Status | Speedup | Reason |
+|---------|--------|---------|--------|
+| vec128  | COMPILE_ERROR | -- | Failed to compile |
+| scratch | SUCCESS | 1.02x  | Below top-K threshold |
+
+### Lineage Updates
+
+- **L1**: Updated best_speedup 1.50 -> 1.82, reset stagnant_rounds
+- **L3**: Pruned (stagnant 3 rounds, best_speedup 1.05x)
+
+### Lineages.json Status
+
+- Active lineages: {count}
+- Pruned lineages: {count}
+- Current round: {round}
+```
+
+### Optimization suggestion categories
+
+When generating suggestions for each variant, use these categories based on the multi-signal analysis:
 
 **Memory-bound (compute_ratio < 0.50):**
 - Increase block size to process more data per tile
@@ -205,46 +412,6 @@ Based on the multi-signal analysis, suggest next steps:
 - Profile deeper: which operations are slow?
 
 **Regression detected:**
-- Compare the current kernel with the previous best
+- Compare the current kernel with the lineage's previous best
 - Identify what changed and why it was slower
 - Suggest reverting the specific change that caused regression
-
-### Step 6: Write analysis
-
-Write `iteration_{N}/analysis.md`:
-
-```markdown
-## Iteration {N} Analysis
-
-**Status**: {SUCCESS/COMPILE_ERROR/INCORRECT}
-**Speedup**: {speedup}x (best so far: {best_speedup}x)
-**Latency**: {latency_ms}ms
-
-### Performance Profile
-| Metric | Value | Assessment |
-|--------|-------|------------|
-| compute_ratio | {compute_ratio} | {memory-bound/balanced/compute-bound} |
-| vliw_bundle_count | {vliw_bundle_count} | {vs previous: +/-N} |
-| MXU dual_ratio | {dual_ratio} | {poor/fair/good/excellent} |
-| arithmetic_intensity | {arithmetic_intensity} | {low/medium/high} |
-| compute_efficiency | {compute_efficiency_pct}% | {vs peak FLOPS} |
-| HBM bandwidth | {hbm_bandwidth_bytes} bytes | {comparison to optimal} |
-| HBM BW utilization | {hbm_bandwidth_utilization_pct}% | {near ceiling / headroom} |
-| VMEM allocated | {vmem_allocation.vmem_bytes} bytes | {pressure level} |
-| Bundle density (avg) | {avg_ops_per_bundle} ops/bundle | {poor/fair/good} |
-| DMA transfers | {dma_count} ({double_buffering ? "double-buffered" : "single-buffered"}) | {assessment} |
-| Pipeline NOPs | {nop_count} | {low/concerning/high} |
-| HLO fusions | {fusion_count} | {0 = ideal for Pallas} |
-
-### Bottleneck
-{Multi-signal diagnosis — primary and secondary bottlenecks}
-
-### Trend
-{Comparison with previous iterations across all metrics}
-
-### Suggestions
-{Specific optimization suggestions based on multi-signal analysis}
-
-### IR Analysis (if available)
-{Specific findings from HLO/LLO/trace — e.g., "LLO shows 12 nop sequences averaging 4 nops each, indicating pipeline bubbles between DMA and MXU ops. Consider adding prefetch or increasing tile size to hide latency."}
-```
