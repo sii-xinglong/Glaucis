@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _load_evaluate_module():
@@ -60,3 +64,98 @@ def simple_compute(M=1):
 
   assert result["ok"] is True
   assert result["max_diff"] == 0.0
+
+
+def test_decode_batch_request():
+  """decode_request should handle batch payload format."""
+  from kernel_evolve.docker_evaluate_helpers import decode_request
+
+  payload = {
+    "batch": True,
+    "reference_code": "def ref(): pass",
+    "shapes": [{"M": 64}],
+    "variants": [
+      {"variant_id": "v1", "kernel_code": "def k1(): pass"},
+    ],
+  }
+  b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+  result = decode_request(b64)
+  assert result["batch"] is True
+  assert len(result["variants"]) == 1
+
+
+def test_batch_dispatch_calls_subprocess():
+  """batch_dispatch should spawn subprocesses and collect results."""
+  from kernel_evolve.docker_evaluate_helpers import batch_dispatch
+
+  payload = {
+    "batch": True,
+    "reference_code": "def ref(): pass",
+    "shapes": [{"M": 64}],
+    "rtol": 0.01,
+    "atol": 1.0,
+    "variants": [
+      {"variant_id": "v1-tiling", "kernel_code": "def k(): pass"},
+      {"variant_id": "v2-pipe", "kernel_code": "def k(): pass"},
+    ],
+  }
+
+  fake_result_json = json.dumps({"status": "SUCCESS", "speedup": 1.5, "latency_ms": 0.5, "fitness": 1.5})
+  fake_stdout = f"some output\nEVAL_RESULT:{fake_result_json}\n"
+  mock_completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=fake_stdout, stderr="")
+
+  with patch("kernel_evolve.docker_evaluate_helpers.subprocess.run", return_value=mock_completed) as mock_run:
+    results = batch_dispatch(payload, evaluator_script="/fake/evaluate.py", per_variant_timeout=60)
+
+  assert mock_run.call_count == 2
+  assert len(results) == 2
+  assert all("EVAL_RESULT:" in line for line in results)
+
+
+def test_batch_dispatch_handles_subprocess_crash():
+  """batch_dispatch should emit COMPILE_ERROR for crashed subprocesses."""
+  from kernel_evolve.docker_evaluate_helpers import batch_dispatch
+
+  payload = {
+    "batch": True,
+    "reference_code": "def ref(): pass",
+    "shapes": [{"M": 64}],
+    "variants": [
+      {"variant_id": "v1-crash", "kernel_code": "raise Exception('boom')"},
+    ],
+  }
+
+  mock_completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="Segmentation fault")
+
+  with patch("kernel_evolve.docker_evaluate_helpers.subprocess.run", return_value=mock_completed):
+    results = batch_dispatch(payload, evaluator_script="/fake/evaluate.py", per_variant_timeout=60)
+
+  assert len(results) == 1
+  parsed = json.loads(results[0].split("EVAL_RESULT:", 1)[1])
+  assert parsed["status"] == "COMPILE_ERROR"
+  assert parsed["variant_id"] == "v1-crash"
+
+
+def test_batch_dispatch_handles_timeout():
+  """batch_dispatch should handle subprocess timeout gracefully."""
+  from kernel_evolve.docker_evaluate_helpers import batch_dispatch
+
+  payload = {
+    "batch": True,
+    "reference_code": "def ref(): pass",
+    "shapes": [{"M": 64}],
+    "variants": [
+      {"variant_id": "v1-slow", "kernel_code": "import time; time.sleep(999)"},
+    ],
+  }
+
+  with patch(
+    "kernel_evolve.docker_evaluate_helpers.subprocess.run",
+    side_effect=subprocess.TimeoutExpired(cmd="python", timeout=60),
+  ):
+    results = batch_dispatch(payload, evaluator_script="/fake/evaluate.py", per_variant_timeout=60)
+
+  assert len(results) == 1
+  parsed = json.loads(results[0].split("EVAL_RESULT:", 1)[1])
+  assert parsed["status"] == "COMPILE_ERROR"
+  assert "timeout" in parsed["error"].lower()
