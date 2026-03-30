@@ -50,6 +50,23 @@
 - **Rule**: When VPU quantization cost exceeds MXU throughput benefit, skip quantization and use bf16 directly. Particularly applicable to weight gradient (tgmm) computations.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 1
 
+### SO6: Unconstrained bf16 tgmm tiling (1.861x speedup)
+- **What**: With bf16 tgmm (SO5), use tiling (2048, 256, 128) for tgmm phase — 2x larger M and 2x larger N than the previous fp8-constrained maximum.
+- **Why**: FP2 (N≤128) and FP7 (M≤1024) constraints were caused by fp8 scale tensor shape mismatches in tokamax. With bf16 inputs, there are no scale tensors, so these constraints don't apply. Larger tiles reduce the tgmm grid from 32 tiles to 8 tiles.
+- **Impact**: 1.861x speedup (5.55ms vs 10.33ms). +7.4% over SO5.
+- **Config**: tiling = (1024, 256, 128, 1024, 256, 128, 2048, 256, 128) with bf16 tgmm
+- **Profile**: VLIW bundles unchanged (18,172), MXU dual_ratio=1.0, compute_efficiency=12.87%
+- **Rule**: When using bf16 inputs for tokamax gmm/tgmm, tiling constraints from fp8 scale handling (FP2, FP7) do not apply. Explore the full tiling space.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 2
+
+### SO7: Zero backward quantization — mixed bf16/fp8 bwd_gmm (1.833x speedup)
+- **What**: Skip dlhs_dout quantization in backward. Pass bf16 grad directly to `tokamax_backend.gmm` with fp8 rhs (mixed precision inputs). Combined with bf16 tgmm (SO5), this eliminates ALL quantization from backward.
+- **Why**: tokamax gmm accepts mixed bf16/fp8 inputs. Removing the dlhs_dout quantize call eliminates ~3,200 VLIW bundles of VPU code (18,172 → 14,937, -18%). MXU ops increase from 672 to 1,056 (+57%), indicating the kernel is more matmul-dominated.
+- **Impact**: 1.833x speedup (5.79ms vs 10.61ms). +5.8% over SO5.
+- **Profile**: VLIW 14,937, MXU 1,056, DMA 28. Fundamentally different compilation profile.
+- **Rule**: tokamax accepts mixed precision (bf16 lhs + fp8 rhs) for gmm. Removing quantization simplifies the VLIW schedule and increases MXU utilization.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 2
+
 ### FP4: stage_profile xprof trace returns zero-duration window
 - **What**: `stage_profile` reports `Invalid trace timing (total_time <= 0)` — xprof trace captures TPU events but the time window between the last two computation events has zero or negative duration.
 - **Why**: The profiled runs (3 iterations) may not produce distinct computation events with measurable gaps on v7x. Events may be merged/grouped by the trace processor, or `tpu_trace_mode=TRACE_COMPUTE_AND_SYNC` may not generate the expected event structure on Ironwood hardware.
@@ -85,3 +102,20 @@
 - **Fix**: Don't attempt to influence XLA scheduling by reordering independent operations in Python. Focus on reducing total work (fewer ops) rather than operation ordering.
 - **Evidence**: Both orderings produce identical VLIW bundle count (18,172) and MXU dual_ratio (1.0), confirming XLA normalizes the schedule. The 0.8ms latency difference comes from subtle register allocation effects.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 1
+
+### SO6: Unconstrained bf16 tgmm tiling (1.861x speedup)
+- **What**: With bf16 tgmm (SO5), use tiling (2048, 256, 128) for tgmm phase — 2x larger M and 2x larger N than the previous fp8-constrained maximum.
+- **Why**: FP2 (N≤128) and FP7 (M≤1024) constraints were caused by fp8 scale tensor shape mismatches in tokamax. With bf16 inputs, there are no scale tensors, so these constraints don't apply. Larger tiles reduce the tgmm grid from 32 tiles to 8 tiles.
+- **Impact**: 1.861x speedup (5.55ms vs 10.33ms). +7.4% over SO5.
+- **Config**: tiling = (1024, 256, 128, 1024, 256, 128, 2048, 256, 128) with bf16 tgmm
+- **Profile**: VLIW bundles unchanged (18,172), MXU dual_ratio=1.0, compute_efficiency=12.87%
+- **Rule**: When using bf16 inputs for tokamax gmm/tgmm, tiling constraints from fp8 scale handling (FP2, FP7) do not apply. Explore the full tiling space.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 2
+
+### SO7: Zero backward quantization — mixed bf16/fp8 bwd_gmm (1.833x speedup)
+- **What**: Skip dlhs_dout quantization in backward. Pass bf16 grad directly to `tokamax_backend.gmm` with fp8 rhs (mixed precision inputs). Combined with bf16 tgmm (SO5), this eliminates ALL quantization from backward.
+- **Why**: tokamax gmm accepts mixed bf16/fp8 inputs. Removing the dlhs_dout quantize call eliminates ~3,200 VLIW bundles of VPU code (18,172 → 14,937, -18%). MXU ops increase from 672 to 1,056 (+57%), indicating the kernel is more matmul-dominated.
+- **Impact**: 1.833x speedup (5.79ms vs 10.61ms). +5.8% over SO5.
+- **Profile**: VLIW 14,937, MXU 1,056, DMA 28. Fundamentally different compilation profile.
+- **Rule**: tokamax accepts mixed precision (bf16 lhs + fp8 rhs) for gmm. Removing quantization simplifies the VLIW schedule and increases MXU utilization.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 2
