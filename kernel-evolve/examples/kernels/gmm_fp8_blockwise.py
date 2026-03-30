@@ -60,7 +60,7 @@ def gmm_fp8_blockwise(
     lhs: jnp.ndarray,
     rhs: jnp.ndarray,
     group_sizes: jnp.ndarray,
-    tiling: tuple[int, ...] = (1024, 256, 128, 1024, 256, 128, 512, 128, 128),
+    tiling: tuple[int, ...] = (1024, 256, 128, 1024, 256, 128, 1024, 128, 128),
 ) -> jnp.ndarray:
     """GMM with fp8_blockwise quantization and tokamax backend."""
     tile_size = 128
@@ -126,19 +126,12 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
     num_actual_groups = rhs.shape[0]
     tile_size = qt_rule.tile_size
 
+    # Only quantize what's needed for bwd_gmm
     dlhs_dout = qpl.quantize(
         grad,
         qt_rule.bwd_qtype,
         channelwise_axes=[0],
         tiled_axes={1: tile_size},
-        calibration_method=qt_rule.bwd_calibration_method,
-        scale_dtype=jnp.float32,
-    )
-    drhs_dout = qpl.quantize(
-        grad,
-        qt_rule.bwd_qtype,
-        channelwise_axes=[1],
-        tiled_axes={0: tile_size},
         calibration_method=qt_rule.bwd_calibration_method,
         scale_dtype=jnp.float32,
     )
@@ -156,7 +149,16 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
         interpret=False,
     )
 
-    # Quantize lhs_t here (deferred from forward)
+    # Defer both drhs_dout and lhs_t quantization until after bwd_gmm
+    # to reduce live tensor count during gmm (reduces register pressure)
+    drhs_dout = qpl.quantize(
+        grad,
+        qt_rule.bwd_qtype,
+        channelwise_axes=[1],
+        tiled_axes={0: tile_size},
+        calibration_method=qt_rule.bwd_calibration_method,
+        scale_dtype=jnp.float32,
+    )
     lhs_t = qpl.quantize(
         lhs_bf16.swapaxes(0, 1),
         qt_rule.act_qtype,
