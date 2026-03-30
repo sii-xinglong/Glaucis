@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from kernel_evolve.evaluator import EvalRequest, EvalResult, Evaluator
+from kernel_evolve.evaluator import BatchEvalRequest, BatchEvalResult, EvalRequest, EvalResult, Evaluator
 
 
 @dataclass
@@ -213,3 +213,67 @@ class KubeEvaluator(Evaluator):
 
     error_snippet = logs[-500:] if len(logs) > 500 else logs
     return EvalResult.compile_error(f"No result in job logs. Tail: {error_snippet}")
+
+  def _render_batch_job_yaml(self, job_name: str, batch_request: BatchEvalRequest) -> str:
+    template_text = Path(self._config.job_template).read_text()
+    mapping = {
+      "JOB_NAME": job_name,
+      "BRANCH": self._config.branch,
+      "REPO": self._config.repo,
+      "VARIANT_ID": f"batch-{len(batch_request.variants)}",
+      "ACTIVE_DEADLINE": str(300 * len(batch_request.variants) + 300),
+    }
+    tmpl = string.Template(template_text)
+    return tmpl.safe_substitute(mapping)
+
+  async def evaluate_batch(self, batch_request: BatchEvalRequest) -> BatchEvalResult:
+    job_name = self._make_job_name(f"batch-{len(batch_request.variants)}v")
+    payload = batch_request.encode_b64()
+
+    try:
+      await self._create_configmap(job_name, payload)
+      rendered_yaml = self._render_batch_job_yaml(job_name, batch_request)
+      await self._apply_job(rendered_yaml)
+    except Exception as e:
+      await self._cleanup(job_name)
+      error_result = EvalResult.compile_error(f"Failed to submit batch job: {e}")
+      return BatchEvalResult(
+        results={v["variant_id"]: error_result for v in batch_request.variants}
+      )
+
+    original_timeout = self._config.timeout
+    self._config.timeout = 300 * len(batch_request.variants) + 300
+    status = await self._poll_job(job_name)
+    self._config.timeout = original_timeout
+
+    if status not in ("Complete", "Failed"):
+      await self._cleanup(job_name)
+      error_result = EvalResult.compile_error("Batch job timed out")
+      return BatchEvalResult(
+        results={v["variant_id"]: error_result for v in batch_request.variants}
+      )
+
+    logs = await self._read_logs(job_name)
+
+    results: dict[str, EvalResult] = {}
+    for line in logs.split("\n"):
+      if "EVAL_RESULT:" in line:
+        json_str = line.split("EVAL_RESULT:", 1)[1].strip()
+        data = json.loads(json_str)
+        variant_id = data.get("variant_id", "unknown")
+        results[variant_id] = EvalResult.from_dict(data)
+
+    for variant_id, result in results.items():
+      if result.metadata.get("artifacts_gcs_prefix"):
+        gcs_prefix = result.metadata["artifacts_gcs_prefix"]
+        artifacts_dir = Path(f"artifacts/{job_name}/{variant_id}")
+        await self._download_artifacts(gcs_prefix, artifacts_dir)
+
+    await self._cleanup(job_name)
+
+    for v in batch_request.variants:
+      vid = v["variant_id"]
+      if vid not in results:
+        results[vid] = EvalResult.compile_error("No result found in job logs")
+
+    return BatchEvalResult(results=results)
