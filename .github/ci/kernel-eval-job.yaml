@@ -38,6 +38,7 @@ spec:
           (git clone "https://github.com/$REPO.git" /workspace && \
            cd /workspace && git checkout "$BRANCH")
           cd /workspace
+          uv pip install --system -e kernel-evolve/
           python kernel-evolve/docker/evaluate.py --eval-payload-file /etc/eval-payload/payload
         env:
         - name: BRANCH
