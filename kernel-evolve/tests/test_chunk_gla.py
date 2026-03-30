@@ -79,22 +79,17 @@ def test_config_loads():
 
 
 def test_reference_forward_small():
-    """Reference kernel produces output on CPU (small dims).
-
-    Note: K must equal H for the g_cumsum broadcast to work, because
-    g_gamma has shape (H,) and broadcast_to targets q.shape = (B,T,H,K).
-    """
+    """Reference kernel produces output on CPU (small dims)."""
     ref_ns = {}
     exec(REFERENCE.read_text(), ref_ns)
 
     import jax.numpy as jnp
 
-    H, K, V = 4, 4, 4
-    q, k, v, g_gamma = ref_ns["_make_test_data"](1, 64, H, K, V, 16)
-    scale = K ** -0.5
+    q, k, v, g_gamma = ref_ns["_make_test_data"](1, 64, 2, 128, 128, 16)
+    scale = 128 ** -0.5
     o = ref_ns["chunk_gla_ref"](
         q.astype(jnp.float32), k.astype(jnp.float32),
         v.astype(jnp.float32), g_gamma, scale, 16
     )
-    assert o.shape == (1, 64, H, V)
+    assert o.shape == (1, 64, 2, 128)
     assert jnp.isfinite(o).all()

@@ -264,7 +264,7 @@ def chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size):
 
     pos = jnp.arange(1, C + 1, dtype=jnp.float32)
     pos = jnp.tile(pos, NT).reshape(1, T, 1, 1)
-    g_cumsum = jnp.broadcast_to(g_gamma * pos, q.shape)
+    g_cumsum = jnp.broadcast_to(g_gamma.reshape(1, 1, -1, 1) * pos, q.shape)
 
     h = chunk_fwd_h(k, v, g_gamma, C)
     A = chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, C)
