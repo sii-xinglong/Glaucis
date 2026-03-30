@@ -32,5 +32,18 @@
 - **Fix**: tile_size MUST stay at 128 for this kernel. Do NOT increase quantization tile_size. The optimization surface for this kernel is limited to tokamax tiling parameters and computation structure.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise optimization (Round 2)
 
+### [F006] Tokamax only supports increasing ONE tiling dimension beyond 128 at a time
+- **Symptom**: Tiling (256,256,256) and (256,512,512) both crash with core dumps. But (256,128,128), (128,256,128), and (128,128,256) all work fine.
+- **Root cause**: tokamax backend's ragged_dot Pallas kernel has internal constraints that prevent multiple tile dimensions from exceeding 128 simultaneously. The exact constraint likely involves VMEM allocation or BlockSpec grid limits.
+- **Fix**: Only increase ONE of TM/TK/TN beyond 128 per tiling triplet. Use per-phase tiling to get different single-dimension increases for fwd/bwd_gmm/bwd_tgmm.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise optimization (Round 3)
+
 ## Successful Optimizations
+
+### [S001] Increasing single tiling dimension from 128→256 yields 1.22-1.32x speedup
+- **Optimization**: Changed one dimension of the tokamax tiling from 128 to 256. Must remove the `tiling = tuple(min(t, tile_size) for t in tiling)` clamping in both _gmm_fwd and _gmm_bwd.
+- **Impact**: 1.0x → 1.32x for TK=256 (128,256,128), 1.32x for TM=256 (256,128,128), 1.22x for TN=256 (128,128,256)
+- **Why it works**: Larger tiles process more data per kernel invocation, increasing MXU throughput. TK=256 and TM=256 increase MXU ops from 36 to 56 per MXU. TN=256 halves register spills from 161K to 74K.
+- **Applicable when**: Optimizing tokamax gmm/tgmm kernels where default tiling is (128,128,128). Always try single-dimension increases first.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise optimization (Round 3)
 

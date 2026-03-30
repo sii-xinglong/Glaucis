@@ -1,5 +1,5 @@
 {
-  "round": 2,
+  "round": 3,
   "config": {
     "top_k": 2,
     "max_active_lineages": 4
@@ -8,20 +8,20 @@
     {
       "id": "L1",
       "parent": null,
-      "best_speedup": 1.0005,
-      "best_kernel": "iteration_1/variants/hbm_compute_overlap/kernel.py",
-      "direction": "hbm_compute_overlap",
-      "history": ["iter-1-hbm_compute_overlap"],
-      "stagnant_rounds": 1
+      "best_speedup": 1.3216,
+      "best_kernel": "iteration_3/variants/tiling_128_256_128/kernel.py",
+      "direction": "K-tiling",
+      "history": ["iter-1-hbm_compute_overlap", "iter-3-tiling_128_256_128"],
+      "stagnant_rounds": 0
     },
     {
       "id": "L2",
       "parent": null,
-      "best_speedup": 1.0001,
-      "best_kernel": "iteration_1/variants/mxu_vpu_overlap/kernel.py",
-      "direction": "mxu_vpu_overlap",
-      "history": ["iter-1-mxu_vpu_overlap"],
-      "stagnant_rounds": 1
+      "best_speedup": 1.3166,
+      "best_kernel": "iteration_3/variants/tiling_256_128_128/kernel.py",
+      "direction": "M-tiling",
+      "history": ["iter-1-mxu_vpu_overlap", "iter-3-tiling_256_128_128"],
+      "stagnant_rounds": 0
     }
   ],
   "pruned": [
