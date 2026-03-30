@@ -48,6 +48,11 @@ def batch_dispatch(
         env=env,
       )
       found = False
+      if proc.returncode != 0:
+        print(
+          f"[batch] variant {variant_id} subprocess exited with code {proc.returncode}",
+          file=sys.stderr,
+        )
       for line in proc.stdout.split("\n"):
         if "EVAL_RESULT:" in line:
           json_str = line.split("EVAL_RESULT:", 1)[1].strip()

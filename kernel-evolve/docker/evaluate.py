@@ -662,7 +662,8 @@ def main():
 
   compile_result = stage_compile(request["kernel_code"])
   if not compile_result["ok"]:
-    print(f"EVAL_RESULT:{json.dumps({'status': 'COMPILE_ERROR', 'error': compile_result['error']})}")
+    err = {"status": "COMPILE_ERROR", "variant_id": job_name, "error": compile_result["error"]}
+    print(f"EVAL_RESULT:{json.dumps(err)}")
     sys.exit(0)
 
   correct_result = stage_correctness(
@@ -676,6 +677,7 @@ def main():
   if not correct_result["ok"]:
     result_data = {
       "status": "INCORRECT",
+      "variant_id": job_name,
       "error": correct_result["error"],
       "max_diff": correct_result["max_diff"],
     }
@@ -684,7 +686,8 @@ def main():
 
   perf_result = stage_performance(compile_result["globals"], request["shapes"])
   if not perf_result["ok"]:
-    print(f"EVAL_RESULT:{json.dumps({'status': 'COMPILE_ERROR', 'error': perf_result['error']})}")
+    err = {"status": "COMPILE_ERROR", "variant_id": job_name, "error": perf_result["error"]}
+    print(f"EVAL_RESULT:{json.dumps(err)}")
     sys.exit(0)
 
   ref_compile = stage_compile(request["reference_code"])
@@ -749,6 +752,7 @@ def main():
 
   result = {
     "status": "SUCCESS",
+    "variant_id": job_name,
     "fitness": speedup,
     "latency_ms": perf_result["latency_ms"],
     "speedup": speedup,

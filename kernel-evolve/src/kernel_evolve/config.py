@@ -45,9 +45,9 @@ class SessionConfig(BaseModel):
 
 
 class BatchConfig(BaseModel):
-  variants_per_round: int = 1
-  top_k: int = 1
-  max_active_lineages: int = 4
+  variants_per_round: int = Field(default=1, ge=1)
+  top_k: int = Field(default=1, ge=1)
+  max_active_lineages: int = Field(default=4, ge=1)
   diversity_directions: list[str] = Field(default_factory=list)
 
 

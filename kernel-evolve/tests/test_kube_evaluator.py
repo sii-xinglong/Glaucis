@@ -210,7 +210,7 @@ async def test_evaluate_batch_success(kube_config, batch_eval_request):
   evaluator._create_configmap = AsyncMock()
   evaluator._render_batch_job_yaml = lambda *_: "rendered"
   evaluator._apply_job = AsyncMock()
-  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._poll_until = AsyncMock(return_value="Complete")
   evaluator._read_logs = AsyncMock(return_value=logs)
   evaluator._cleanup = AsyncMock()
 
@@ -246,7 +246,7 @@ async def test_evaluate_batch_partial_failure(kube_config, batch_eval_request):
   evaluator._create_configmap = AsyncMock()
   evaluator._render_batch_job_yaml = lambda *_: "rendered"
   evaluator._apply_job = AsyncMock()
-  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._poll_until = AsyncMock(return_value="Complete")
   evaluator._read_logs = AsyncMock(return_value=logs)
   evaluator._cleanup = AsyncMock()
 
@@ -264,7 +264,7 @@ async def test_evaluate_batch_job_timeout(kube_config, batch_eval_request):
   evaluator._create_configmap = AsyncMock()
   evaluator._render_batch_job_yaml = lambda *_: "rendered"
   evaluator._apply_job = AsyncMock()
-  evaluator._poll_job = AsyncMock(return_value="timed_out")
+  evaluator._poll_until = AsyncMock(return_value="timed_out")
   evaluator._cleanup = AsyncMock()
 
   result = await evaluator.evaluate_batch(batch_eval_request)
@@ -301,7 +301,7 @@ async def test_evaluate_batch_downloads_artifacts(kube_config, batch_eval_reques
   evaluator._create_configmap = AsyncMock()
   evaluator._render_batch_job_yaml = lambda *_: "rendered"
   evaluator._apply_job = AsyncMock()
-  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._poll_until = AsyncMock(return_value="Complete")
   evaluator._read_logs = AsyncMock(return_value=logs)
   evaluator._download_artifacts = AsyncMock()
   evaluator._cleanup = AsyncMock()
