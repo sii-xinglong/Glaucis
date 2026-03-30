@@ -115,3 +115,46 @@ async def test_evaluate_no_result_in_logs(kube_config, eval_request):
   result = await evaluator.evaluate(eval_request)
   assert result.status == EvalStatus.COMPILE_ERROR
   assert "no result" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_downloads_artifacts(kube_config, eval_request):
+  """evaluate() should attempt to download GCS artifacts when gcs_prefix is present."""
+  evaluator = KubeEvaluator(kube_config)
+  result_json = json.dumps({
+    "status": "SUCCESS", "fitness": 2.5, "latency_ms": 0.5, "speedup": 2.5,
+    "metadata": {"artifacts_gcs_prefix": "gs://glaucis-profiles/test-job"},
+  })
+
+  evaluator._create_configmap = AsyncMock()
+  evaluator._render_job_yaml = lambda *_: "rendered"
+  evaluator._apply_job = AsyncMock()
+  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._read_logs = AsyncMock(return_value=f"EVAL_RESULT:{result_json}")
+  evaluator._download_artifacts = AsyncMock()
+  evaluator._cleanup = AsyncMock()
+
+  result = await evaluator.evaluate(eval_request)
+  assert result.status == EvalStatus.SUCCESS
+  evaluator._download_artifacts.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_skips_download_when_no_gcs_prefix(kube_config, eval_request):
+  """evaluate() should not call _download_artifacts when no gcs_prefix."""
+  evaluator = KubeEvaluator(kube_config)
+  result_json = json.dumps({
+    "status": "SUCCESS", "fitness": 2.5, "latency_ms": 0.5, "speedup": 2.5,
+  })
+
+  evaluator._create_configmap = AsyncMock()
+  evaluator._render_job_yaml = lambda *_: "rendered"
+  evaluator._apply_job = AsyncMock()
+  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._read_logs = AsyncMock(return_value=f"EVAL_RESULT:{result_json}")
+  evaluator._download_artifacts = AsyncMock()
+  evaluator._cleanup = AsyncMock()
+
+  result = await evaluator.evaluate(eval_request)
+  assert result.status == EvalStatus.SUCCESS
+  evaluator._download_artifacts.assert_not_called()
