@@ -95,13 +95,13 @@ def test_config_with_batch():
       "variants_per_round": 5,
       "top_k": 2,
       "max_active_lineages": 4,
-      "diversity_directions": ["tiling_strategy", "pipeline_depth"],
+      "diversity_directions": ["tiling_strategy", "hbm_compute_overlap"],
     },
   )
   assert cfg.batch.variants_per_round == 5
   assert cfg.batch.top_k == 2
   assert cfg.batch.max_active_lineages == 4
-  assert cfg.batch.diversity_directions == ["tiling_strategy", "pipeline_depth"]
+  assert cfg.batch.diversity_directions == ["tiling_strategy", "hbm_compute_overlap"]
 
 
 def test_batch_config_defaults():

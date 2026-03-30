@@ -25,7 +25,7 @@ Execute these steps in order:
    - `variants_per_round` (N): how many variants to generate per active lineage per round
    - `top_k` (K): how many best lineages survive each round
    - `max_active_lineages`: cap on total active lineages to prevent exponential growth
-   - `diversity_directions`: list of technical directions to guide variant generation (e.g., `tiling_strategy`, `pipeline_depth`, `memory_layout`, `mxu_utilization`, `vectorization`)
+   - `diversity_directions`: list of technical directions to guide variant generation (e.g., `tiling_strategy`, `hbm_compute_overlap`, `mxu_vpu_overlap`, `memory_layout`, `mxu_utilization`, `vectorization`)
 
    If `batch` section is missing, default to `variants_per_round=1, top_k=1` (single-variant behavior).
 
@@ -69,28 +69,40 @@ For each round from 1 to `max_iterations`:
 
 **CRITICAL RULE**: Each variant MUST explore a genuinely different TECHNICAL DIRECTION. Changing block sizes from 128 to 256 is NOT a different direction — that is a parameter variation. Different directions means fundamentally different optimization APPROACHES:
 - Tiling strategy (K-tiling, 2D tiling, diamond tiling)
-- Pipeline depth and structure (emit_pipeline, software pipelining, double buffering)
+- HBM–compute overlap (double buffering, emit_pipeline, DMA prefetch to hide HBM latency)
+- MXU–VPU overlap (schedule matrix ops and vector ops to run concurrently on separate units)
 - Memory layout (scratch memory, accumulator placement, data reuse patterns)
 - MXU utilization (dual MXU balancing, operand layout for matrix units)
 - Vectorization (inner dimension alignment, loop restructuring for SIMD)
+
+**Parallel generation**: Use the Agent tool to generate ALL variants concurrently. Launch one sub-agent per variant in a single message so they run in parallel. Each sub-agent independently writes its kernel file. After all sub-agents complete, the main agent collects their results and writes `strategy.md`.
 
 #### Round 1 (No lineages yet)
 
 Generate N variants from the baseline kernel, each exploring a DIFFERENT technical direction from the `diversity_directions` list:
 
 1. Re-read AGENT.md failure patterns and successful optimizations
-2. For each direction in `diversity_directions` (up to `variants_per_round`):
-   - Design an optimization approach specific to that direction
-   - Write the mutated kernel to `iteration_1/variants/{direction_name}/kernel.py`
-   - Start from the template kernel (keep everything outside EVOLVE-BLOCK unchanged)
-   - Replace the code between `# EVOLVE-BLOCK-START` and `# EVOLVE-BLOCK-END`
-   - Preserve function signatures
-   - Validate: the file must be valid Python (no syntax errors)
-3. Write `iteration_1/strategy.md`:
+2. Prepare shared context for sub-agents: read the template kernel content and AGENT.md content into variables
+3. **Dispatch N sub-agents in parallel** (one Agent tool call per direction, all in a single message):
+   Each sub-agent receives a prompt containing:
+   - The full template kernel content
+   - The AGENT.md failure patterns and successful optimizations
+   - Its assigned direction name (e.g., `hbm_compute_overlap`)
+   - The TPU v7x hard rules and optimization knowledge from this skill
+   - The output path: `iteration_1/variants/{direction_name}/kernel.py`
+   - Instructions to:
+     - Design an optimization approach specific to its assigned direction
+     - Write the mutated kernel file (keep everything outside EVOLVE-BLOCK unchanged)
+     - Replace only the code between `# EVOLVE-BLOCK-START` and `# EVOLVE-BLOCK-END`
+     - Preserve function signatures
+     - Validate: the file must be valid Python (no syntax errors)
+     - Return a summary: approach taken, expected impact, key changes
+4. Collect the returned summaries from all sub-agents and write `iteration_1/strategy.md`:
    ```markdown
    ## Round 1 Strategy
 
    Generating {N} variants from baseline, each exploring a different technical direction.
+   Variants generated in parallel via sub-agents.
 
    ### Variant: {direction_1}
    **Technical direction**: {direction_name}
@@ -107,17 +119,26 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
 1. Read `lineages.json` for active lineages
 2. Re-read AGENT.md failure patterns and successful optimizations
 3. For each active lineage, read its `best_kernel` file
-4. Generate variants:
-   - If only 1 active lineage: generate N variants from it, each a different direction
+4. Plan variant assignments:
+   - If only 1 active lineage: assign N different directions to it
    - If multiple active lineages: distribute N variants across lineages (at least 1 per lineage, extras to best-performing lineages)
 5. Variant naming convention: `{lineage_id}_{direction}` (e.g., `L1_tiling`, `L2_memory`)
-6. Write each variant kernel to `iteration_{N}/variants/{variant_name}/kernel.py`
-7. Write `iteration_{N}/strategy.md` covering ALL variants:
+6. **Dispatch all variant sub-agents in parallel** (one Agent tool call per variant, all in a single message):
+   Each sub-agent receives a prompt containing:
+   - The base kernel content (from its assigned lineage's `best_kernel`)
+   - The AGENT.md failure patterns and successful optimizations
+   - Its assigned direction and lineage context (lineage ID, previous best speedup, prior direction)
+   - The TPU v7x hard rules and optimization knowledge from this skill
+   - The output path: `iteration_{N}/variants/{variant_name}/kernel.py`
+   - Same mutation instructions as Round 1
+   - Return a summary: approach taken, expected impact, key changes
+7. Collect the returned summaries from all sub-agents and write `iteration_{N}/strategy.md`:
    ```markdown
    ## Round {N} Strategy
 
    Active lineages: {count}
    Total variants this round: {total}
+   Variants generated in parallel via sub-agents.
 
    ### Lineage {L_id} (best speedup: {X}x, direction: {dir})
 
@@ -238,8 +259,9 @@ When writing kernel mutations, follow these TPU v7x Ironwood constraints:
 1. **K-tiling**: Split the K (reduction) dimension into tiles. Accumulate partial results in scratch memory. Reduces HBM bandwidth pressure.
 2. **Block size tuning**: Try 64, 128, 256. Larger blocks = more compute per tile but more VMEM. Match to matrix dimensions.
 3. **Scratch memory**: Use `pltpu.SemaphoreType.REGULAR` scratch for fast VMEM accumulators instead of writing back to HBM each tile.
-4. **Pipelining**: Use `pltpu.emit_pipeline` to overlap compute and memory transfers across tiles.
-5. **Vectorization**: Ensure inner dimensions are multiples of 128 for MXU efficiency.
+4. **HBM–compute overlap**: Use `pltpu.emit_pipeline` or manual double buffering to overlap HBM DMA transfers with MXU/VPU compute. Prefetch the next tile while computing the current one.
+5. **MXU–VPU overlap**: Schedule MXU matmul operations and VPU element-wise/reduction operations to execute concurrently. TPU can run both units in parallel when data dependencies allow.
+6. **Vectorization**: Ensure inner dimensions are multiples of 128 for MXU efficiency.
 
 **Common pitfalls:**
 - Block size 512 may OOM on 2048x2048 matrices (VMEM limit)
