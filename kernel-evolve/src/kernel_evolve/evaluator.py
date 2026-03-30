@@ -117,6 +117,57 @@ class EvalRequest:
     return cls.from_dict(data)
 
 
+@dataclass
+class BatchEvalRequest:
+  reference_code: str
+  shapes: list[dict[str, Any]]
+  variants: list[dict[str, str]]
+  rtol: float = 1e-2
+  atol: float = 1e-2
+
+  def to_dict(self) -> dict[str, Any]:
+    return {
+      "batch": True,
+      "reference_code": self.reference_code,
+      "shapes": self.shapes,
+      "variants": self.variants,
+      "rtol": self.rtol,
+      "atol": self.atol,
+    }
+
+  def encode_b64(self) -> str:
+    return base64.b64encode(json.dumps(self.to_dict()).encode()).decode()
+
+  def to_single_requests(self) -> list[EvalRequest]:
+    return [
+      EvalRequest(
+        variant_id=v["variant_id"],
+        kernel_code=v["kernel_code"],
+        reference_code=self.reference_code,
+        shapes=self.shapes,
+        rtol=self.rtol,
+        atol=self.atol,
+      )
+      for v in self.variants
+    ]
+
+
+@dataclass
+class BatchEvalResult:
+  results: dict[str, EvalResult]
+
+  def best(self) -> EvalResult | None:
+    successes = [r for r in self.results.values() if r.status == EvalStatus.SUCCESS]
+    return max(successes, key=lambda r: r.speedup) if successes else None
+
+  def ranked(self) -> list[tuple[str, EvalResult]]:
+    return sorted(
+      [(vid, r) for vid, r in self.results.items() if r.status == EvalStatus.SUCCESS],
+      key=lambda x: x[1].speedup,
+      reverse=True,
+    )
+
+
 class Evaluator:
   async def evaluate(self, request: EvalRequest) -> EvalResult:
     raise NotImplementedError("Subclass must implement evaluate()")

@@ -1,6 +1,11 @@
 """Tests for the three-stage evaluator pipeline."""
 
+import base64
+import json
+
 from kernel_evolve.evaluator import (
+  BatchEvalRequest,
+  BatchEvalResult,
   EvalRequest,
   EvalResult,
   EvalStatus,
@@ -71,3 +76,88 @@ def test_eval_request_serialization():
   assert restored.variant_id == "v001"
   assert restored.kernel_code == "def k(): pass"
   assert len(restored.shapes) == 1
+
+
+def test_batch_eval_request_creation():
+  req = BatchEvalRequest(
+    reference_code="def ref(): pass",
+    shapes=[{"M": 1024}],
+    variants=[
+      {"variant_id": "v1-tiling", "kernel_code": "def k1(): pass"},
+      {"variant_id": "v2-pipeline", "kernel_code": "def k2(): pass"},
+    ],
+  )
+  assert len(req.variants) == 2
+  assert req.variants[0]["variant_id"] == "v1-tiling"
+  assert req.reference_code == "def ref(): pass"
+
+
+def test_batch_eval_request_to_dict():
+  req = BatchEvalRequest(
+    reference_code="def ref(): pass",
+    shapes=[{"M": 1024}],
+    variants=[
+      {"variant_id": "v1", "kernel_code": "def k1(): pass"},
+    ],
+    rtol=0.01,
+    atol=1.0,
+  )
+  d = req.to_dict()
+  assert d["batch"] is True
+  assert d["reference_code"] == "def ref(): pass"
+  assert len(d["variants"]) == 1
+  assert d["rtol"] == 0.01
+
+
+def test_batch_eval_request_encode_decode_b64():
+  req = BatchEvalRequest(
+    reference_code="def ref(): pass",
+    shapes=[{"M": 64}],
+    variants=[
+      {"variant_id": "v1", "kernel_code": "def k1(): pass"},
+      {"variant_id": "v2", "kernel_code": "def k2(): pass"},
+    ],
+  )
+  encoded = req.encode_b64()
+  decoded = json.loads(base64.b64decode(encoded).decode())
+  assert decoded["batch"] is True
+  assert len(decoded["variants"]) == 2
+
+
+def test_batch_eval_request_to_single_requests():
+  req = BatchEvalRequest(
+    reference_code="def ref(): pass",
+    shapes=[{"M": 64}],
+    variants=[
+      {"variant_id": "v1", "kernel_code": "def k1(): pass"},
+      {"variant_id": "v2", "kernel_code": "def k2(): pass"},
+    ],
+    rtol=0.05,
+    atol=0.5,
+  )
+  singles = req.to_single_requests()
+  assert len(singles) == 2
+  assert isinstance(singles[0], EvalRequest)
+  assert singles[0].variant_id == "v1"
+  assert singles[0].kernel_code == "def k1(): pass"
+  assert singles[0].reference_code == "def ref(): pass"
+  assert singles[0].rtol == 0.05
+  assert singles[1].variant_id == "v2"
+
+
+def test_batch_eval_result():
+  r1 = EvalResult.success(latency_ms=1.0, speedup=1.5)
+  r2 = EvalResult.compile_error("bad code")
+  batch = BatchEvalResult(results={"v1": r1, "v2": r2})
+  assert batch.results["v1"].speedup == 1.5
+  assert batch.results["v2"].status == EvalStatus.COMPILE_ERROR
+  assert batch.best() == r1
+  assert batch.ranked() == [("v1", r1)]
+
+
+def test_batch_eval_result_best_returns_none_when_all_failed():
+  r1 = EvalResult.compile_error("err1")
+  r2 = EvalResult.compile_error("err2")
+  batch = BatchEvalResult(results={"v1": r1, "v2": r2})
+  assert batch.best() is None
+  assert batch.ranked() == []
