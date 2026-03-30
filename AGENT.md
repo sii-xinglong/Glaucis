@@ -197,8 +197,9 @@
 ### [FP13] tgmm TM=4096 causes VLIW complexity bloat without speedup
 - **Symptom**: tgmm TM=4096 doubles VLIW bundles (47,683 vs 23,462) and MXU ops (3,584 vs 1,792) but regresses speedup from 2.335x to 2.277x (-2.5%).
 - **Root cause**: TM=4096 tiles are too large for efficient compilation. The compiler generates 2x more code per tile without reducing total grid iterations proportionally. Accumulators of 4096×128×4B=2MB per tile likely cause internal compiler complexity.
-- **Fix**: tgmm TM should stay at 2048 for bf16 tgmm. TM=4096 is counterproductive.
+- **Fix**: tgmm TM=1024 is optimal (see SO14). TM=2048 works but is suboptimal. TM=4096 is counterproductive.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
+- **Updated**: 2026-03-31, round 6 — TM=1024 proved superior to TM=2048 (SO14)
 
 ### [FP14] bwd_gmm TK=512 regresses with TM=1024 but improves with TM=256
 - **Symptom**: bwd_gmm (1024, 512, 128) regresses to 2.307x from 2.335x (-1.2%). But bwd_gmm (256, 512, 128) improves to 2.460x (+5.4%).
@@ -222,6 +223,18 @@
 - **Rule**: Forward TN=256 is safe and beneficial for these shapes. N=512 gives exactly 2 tiles (perfect), N=2048 gives 8 tiles.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 5
 
+### [FP22] Forward TK=1024 causes major regression
+- **Symptom**: fwd TK=1024 with TN=256 regresses from 2.751x to 2.498x (-9.2%), increases spills from 156 to 234.
+- **Root cause**: TK=1024 creates tiles that exceed the compiler's efficient scheduling range. For K=2048, TK=1024 means only 2 K-iterations — the loop body is too large (one iteration processes too much data) causing register pressure.
+- **Fix**: Forward TK must stay at 512. TK=1024 exceeds the optimal point.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
+
+### [FP23] Forward TN=512 regression — single-tile N inefficient
+- **Symptom**: fwd TN=512 for Gate/Up (N=512) regresses from 2.769x to 2.410x (-13.0%), 231 spills.
+- **Root cause**: TN=512 covers the entire N dimension for Gate/Up in a single tile, but the 256×512 tile output is too large for efficient register allocation. TN=256 (2 tiles) provides better scheduling granularity.
+- **Fix**: Forward TN must stay at 256. Do NOT set TN equal to N for any shape.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
+
 ### [FP16b] bwd_gmm TN=256 causes catastrophic register spills
 - **Symptom**: bwd_gmm TN=256 produces 9,447 register spills (60x increase from 156), regressing speedup from 2.651x to 2.295x (-13.4%).
 - **Root cause**: bwd_gmm with transpose_rhs=True creates intermediate tensors proportional to TN. TN=256 doubles the intermediate buffer size, overflowing register capacity. The compiler spills 9,447 vectors to VMEM.
@@ -233,6 +246,23 @@
 - **Root cause**: Larger N tiles change the tgmm matmul decomposition, reducing the number of MXU operations per tile. Similar mechanism to FP2 (N>128 constraint) but for bf16 tgmm — even without fp8 scale issues, the larger N tiles produce suboptimal compilation.
 - **Fix**: tgmm TN MUST stay at 128 regardless of input precision (fp8 or bf16). This extends FP2 beyond fp8 constraints.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 4
+
+### SO14: tgmm TM=1024 — halved VLIW complexity (2.847x speedup)
+- **What**: Reduce tgmm TM from 2048 to 1024. Tiling: (256, 512, 256, 256, 512, 128, 1024, 512, 128).
+- **Why**: TM=1024 halves the tgmm tile work, producing dramatically simpler compiled code. VLIW bundles dropped from 23,462 to 12,951 (-44.8%), MXU ops halved from 1,792 to 896. Despite doing half the MXU ops per tile, the kernel is faster because the simpler VLIW schedule has better pipeline utilization. This is the opposite of FP13 (TM=4096 bloat) — the compiler efficiency sweet spot is at TM=1024.
+- **Impact**: 2.847x speedup (~3.61ms). +2.8% over SO13 (2.769x). New overall best.
+- **Profile**: VLIW 12,951, MXU 896, dual_ratio=1.0, compute_efficiency=19.80%, spills=156
+- **Rule**: For bf16 tgmm with G=32 groups: TM=1024 is optimal. Smaller tiles = simpler VLIW = faster execution, even with fewer MXU ops. This creates 8 tgmm tiles per group (M=8192 / TM=1024 = 8).
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
+
+### SO15: bf16 scale_dtype — register pressure elimination (2.819x speedup)
+- **What**: Use `scale_dtype=jnp.bfloat16` (instead of float32) for all FP8 quantization scale factors. Tiling unchanged: (256, 512, 256, 256, 512, 128, 2048, 512, 128).
+- **Why**: bf16 scale factors halve the register footprint of scale tensors. This reduces register spills from 156 to 9 (-94%). The compiler can keep more values in registers, improving VLIW scheduling quality. bf16 scales have sufficient precision for FP8 blockwise quantization.
+- **Impact**: 2.819x speedup (~3.65ms). +2.5% over L1's previous best (2.751x).
+- **Profile**: VLIW 23,462, MXU 896, dual_ratio=1.0, compute_efficiency=19.59%, spills=9
+- **Note**: Previously, bf16 scales interfered with L2+TK=512 compilation (R4, 2.456x vs 2.570x). On L1's code path, they work well. Code-path sensitivity persists.
+- **Rule**: bf16 scale_dtype can eliminate register pressure when the kernel has significant spills. Test on each lineage's code path separately.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
 
 ### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
 - **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
