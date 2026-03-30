@@ -438,10 +438,12 @@ def compute_derived_metrics(
   hbm_bytes: int | None,
   latency_ms: float,
   peak_flops_per_sec: float = 2307e12,
+  peak_hbm_bw_bytes_per_sec: float = 3690e9,
 ) -> dict:
-  """Compute arithmetic intensity and compute efficiency.
+  """Compute arithmetic intensity, compute efficiency, and HBM bandwidth utilization.
 
-  Returns {"arithmetic_intensity": float|None, "compute_efficiency_pct": float|None}.
+  Returns {"arithmetic_intensity": float|None, "compute_efficiency_pct": float|None,
+           "hbm_bandwidth_utilization_pct": float|None}.
   """
   arithmetic_intensity = None
   compute_efficiency_pct = None
@@ -453,9 +455,15 @@ def compute_derived_metrics(
     actual_flops_per_sec = flops / (latency_ms / 1000.0)
     compute_efficiency_pct = (actual_flops_per_sec / peak_flops_per_sec) * 100.0
 
+  hbm_bandwidth_utilization_pct = None
+  if hbm_bytes is not None and latency_ms > 0 and peak_hbm_bw_bytes_per_sec > 0:
+    actual_bw = hbm_bytes / (latency_ms / 1000.0)
+    hbm_bandwidth_utilization_pct = (actual_bw / peak_hbm_bw_bytes_per_sec) * 100.0
+
   return {
     "arithmetic_intensity": arithmetic_intensity,
     "compute_efficiency_pct": compute_efficiency_pct,
+    "hbm_bandwidth_utilization_pct": hbm_bandwidth_utilization_pct,
   }
 
 
@@ -515,31 +523,48 @@ def analyze_ir_dumps(hlo_dir: str, llo_dir: str) -> dict[str, Any]:
   *hlo_dir*, then delegates to the per-metric parsers.
 
   Returns a dict with keys ``vliw_bundle_count``, ``mxu_utilization``,
-  ``hbm_bandwidth_bytes``, and ``flops`` -- each ``None`` when the
-  corresponding file is missing or parsing fails.
+  ``hbm_bandwidth_bytes``, ``flops``, ``vmem_allocation``,
+  ``bundle_density``, ``dma_analysis``, ``special_units``, and
+  ``fusion_analysis`` -- each ``None`` when the corresponding file is
+  missing or parsing fails.
   """
   vliw: int | None = None
   mxu: dict | None = None
   hbm: int | None = None
   flops: float | None = None
+  vmem: dict | None = None
+  density: dict | None = None
+  dma: dict | None = None
+  special: dict | None = None
+  fusion: dict | None = None
 
   llo_path = find_final_llo_file(llo_dir) if os.path.isdir(llo_dir) else None
   if llo_path is not None:
     llo_text = Path(llo_path).read_text()
     vliw = count_vliw_bundles(llo_text)
     mxu = parse_mxu_distribution(llo_text)
+    vmem = parse_vmem_allocations(llo_text)
+    density = analyze_bundle_density(llo_text)
+    dma = analyze_dma_ops(llo_text)
+    special = analyze_special_units(llo_text)
 
   hlo_path = find_hlo_file(hlo_dir)
   if hlo_path is not None:
     hlo_text = Path(hlo_path).read_text()
     hbm = estimate_hbm_bandwidth(hlo_text)
     flops = count_flops_from_hlo(hlo_text)
+    fusion = count_hlo_fusions(hlo_text)
 
   return {
     "vliw_bundle_count": vliw,
     "mxu_utilization": mxu,
     "hbm_bandwidth_bytes": hbm,
     "flops": flops,
+    "vmem_allocation": vmem,
+    "bundle_density": density,
+    "dma_analysis": dma,
+    "special_units": special,
+    "fusion_analysis": fusion,
   }
 
 
