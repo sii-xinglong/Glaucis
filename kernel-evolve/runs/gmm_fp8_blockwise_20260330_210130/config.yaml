@@ -1,0 +1,49 @@
+kernel:
+  name: "gmm_fp8_blockwise"
+  template: "kernels/gmm_fp8_blockwise.py"
+  reference: "kernels/gmm_fp8_blockwise_ref.py"
+  evolve_markers:
+    start: "# EVOLVE-BLOCK-START"
+    end: "# EVOLVE-BLOCK-END"
+
+# AL model per-EP-shard dimensions:
+#   Gate/Up: lhs [8192, 2048] @ rhs [32, 2048, 512]
+#   Down:    lhs [8192, 512]  @ rhs [32, 512, 2048]
+shapes:
+  - { M: 8192, K: 2048, N: 512, G: 32 }   # Gate/Up projection
+  - { M: 8192, K: 512, N: 2048, G: 32 }   # Down projection
+
+correctness:
+  method: "allclose"
+  # Both kernel and reference use the same FP8 baseline config, so max_diff
+  # should be ~0. Small tolerance for floating point non-determinism.
+  rtol: 1e-2
+  atol: 1.0
+
+evaluator:
+  namespace: "default"
+  job_template: ".github/ci/kernel-eval-gmm-job.yaml"
+  repo: "sii-xinglong/Glaucis"
+  branch: "main"
+  poll_interval: 15
+  timeout: 600
+
+tpu:
+  cluster: "tpu7x-cluster"
+  zone: "us-central1"
+
+session:
+  max_iterations: 20
+  output_dir: "runs/gmm_fp8_blockwise"
+
+batch:
+  variants_per_round: 5
+  top_k: 2
+  max_active_lineages: 4
+  diversity_directions:
+    - "tiling_strategy"
+    - "hbm_compute_overlap"
+    - "mxu_vpu_overlap"
+    - "memory_layout"
+    - "quantization_strategy"
+    - "mxu_utilization"
