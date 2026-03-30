@@ -60,9 +60,17 @@ def gmm_fp8_blockwise(
     lhs: jnp.ndarray,
     rhs: jnp.ndarray,
     group_sizes: jnp.ndarray,
-    tiling: tuple[int, ...] = (1024, 256, 128, 1024, 256, 128, 1024, 128, 128),
+    tiling: tuple[int, ...] = (1024, 256, 128, 1024, 256, 128, 2048, 256, 128),
 ) -> jnp.ndarray:
-    """GMM with fp8_blockwise quantization and tokamax backend."""
+    """GMM with fp8_blockwise quantization and tokamax backend.
+
+    L1_tgmm_tiling: Based on L1 (quantization_strategy). Since bf16 tgmm
+    bypasses FP2 (tgmm N <= 128) and FP7 (tgmm M <= 1024) constraints
+    that were caused by fp8 scale tensor mismatches, we try much larger
+    tgmm tiling: (2048, 256, 128). This halves the M-grid iterations
+    and quadruples N coverage for tgmm, potentially improving MXU
+    utilization for the weight gradient computation.
+    """
     tile_size = 128
 
     qt_rule = qwix.QtRule(
@@ -95,7 +103,6 @@ def _gmm_fwd(lhs, rhs, group_sizes, qt_rule, tiling):
         calibration_method=qt_rule.act_calibration_method,
         scale_dtype=jnp.float32,
     )
-    # Defer lhs_t quantization to backward — save forward compute
     rhs = qpl.quantize(
         rhs,
         qt_rule.weight_qtype,
@@ -117,7 +124,6 @@ def _gmm_fwd(lhs, rhs, group_sizes, qt_rule, tiling):
         transpose_rhs=False,
         interpret=False,
     )
-    # Store lhs_bf16 instead of pre-quantized lhs_t
     return out, (lhs, rhs, group_sizes, lhs_bf16)
 
 
@@ -126,7 +132,7 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
     num_actual_groups = rhs.shape[0]
     tile_size = qt_rule.tile_size
 
-    # Only quantize what's needed for bwd_gmm
+    # Quantize grad for bwd_gmm (lhs gradient still needs fp8 precision)
     dlhs_dout = qpl.quantize(
         grad,
         qt_rule.bwd_qtype,
@@ -149,29 +155,16 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
         interpret=False,
     )
 
-    # Defer both drhs_dout and lhs_t quantization until after bwd_gmm
-    # to reduce live tensor count during gmm (reduces register pressure)
-    drhs_dout = qpl.quantize(
-        grad,
-        qt_rule.bwd_qtype,
-        channelwise_axes=[1],
-        tiled_axes={0: tile_size},
-        calibration_method=qt_rule.bwd_calibration_method,
-        scale_dtype=jnp.float32,
-    )
-    lhs_t = qpl.quantize(
-        lhs_bf16.swapaxes(0, 1),
-        qt_rule.act_qtype,
-        channelwise_axes=[0],
-        tiled_axes={1: tile_size},
-        calibration_method=qt_rule.act_calibration_method,
-        scale_dtype=jnp.float32,
-    )
+    # bf16 tgmm: skip drhs_dout and lhs_t quantization.
+    # Weight gradients are less precision-sensitive.
+    # Larger tgmm tiling (2048, 256, 128) is possible because bf16
+    # bypasses fp8 scale tensor constraints (FP2/FP7).
+    lhs_t_bf16 = lhs_bf16.swapaxes(0, 1)
 
     bwd_tgmm_tiling = _clamp_tiling(tiling[6:9] if len(tiling) >= 9 else tiling[:3], tile_size)
     drhs = tokamax_backend.tgmm(
-        lhs=lhs_t,
-        rhs=drhs_dout,
+        lhs=lhs_t_bf16,
+        rhs=grad,
         group_sizes=group_sizes,
         precision=jax.lax.Precision.DEFAULT,
         out_dtype=rhs_dtype,
