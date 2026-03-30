@@ -440,10 +440,10 @@ def chunk_gla(q, k, v, g_gamma, scale, chunk_size):
 
     def _fwd(q, k, v):
         g_cumsum, A, h, o = chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size)
-        return o, (q, k, v, g_cumsum, h, A)
+        return o, (q, k, v, g_cumsum, h)
 
     def _bwd(residuals, do):
-        q, k, v, g_cumsum, h, A = residuals
+        q, k, v, g_cumsum, h = residuals
         B, T, H, K = q.shape
         V = v.shape[-1]
         C = chunk_size
