@@ -206,6 +206,20 @@
 - **Fix**: When increasing TK, ensure TM is small enough to keep sub-tile count low. Per-group TM alignment (TM=256) is the prerequisite for TK enlargement.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
 
+### SO12: Optimal tiling — all TK=512, all TM=256 for gmm (2.651x speedup)
+- **What**: Cross-pollinate L1 (fwd TK=512) with L2 (bwd TM=256+TK=512). Tiling: (256, 512, 128, 256, 512, 128, 2048, 512, 128).
+- **Why**: All gmm phases use TM=256 (per-group M alignment) and TK=512 (halved K-loops). tgmm uses proven TM=2048, TK=512, TN=128. This is the culmination of SO9+SO10+SO11.
+- **Impact**: 2.651x speedup (3.898ms). +7.8% over SO11 (2.460x). New overall best.
+- **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0, compute_efficiency=18.34%, spills=156
+- **Rule**: For grouped matmul with per-group M=256: use TM=256 for ALL gmm phases (fwd + bwd), TK=512 for ALL phases, TN=128. tgmm: TM=2048, TK=512, TN=128.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 4
+
+### [FP15] tgmm TN=256 halves MXU ops — regression like FP2
+- **Symptom**: tgmm TN=256 (vs TN=128) drops MXU ops from 1,792 to 1,024 (-43%), increases VLIW bundles from 23,462 to 24,465 (+4.3%), regresses speedup from 2.460x to 2.452x.
+- **Root cause**: Larger N tiles change the tgmm matmul decomposition, reducing the number of MXU operations per tile. Similar mechanism to FP2 (N>128 constraint) but for bf16 tgmm — even without fp8 scale issues, the larger N tiles produce suboptimal compilation.
+- **Fix**: tgmm TN MUST stay at 128 regardless of input precision (fp8 or bf16). This extends FP2 beyond fp8 constraints.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 4
+
 ### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
 - **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
 - **Root cause**: tgmm with TK=512 generates 2x more matmul tiles, each doing a full K=512 reduction. TK=256 reduces the matmul work per tile by half. The extra VLIW bundles with TK=512 are dominated by MXU ops, which is beneficial.
