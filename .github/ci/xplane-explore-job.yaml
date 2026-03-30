@@ -30,7 +30,10 @@ spec:
           set -ex
           pip install uv
           uv pip install --system --prerelease=allow --no-cache \
-            jax jaxlib libtpu numpy xprof \
+            jax jaxlib numpy xprof \
+            --extra-index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+          uv pip install --system --prerelease=allow --no-cache \
+            'libtpu==0.0.38.dev20260315+nightly' \
             --extra-index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
           BRANCH="explore-xplane-tools"
           git clone --depth=1 --branch="$BRANCH" \
