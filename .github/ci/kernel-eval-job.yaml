@@ -52,6 +52,8 @@ spec:
             configMapKeyRef:
               name: ${JOB_NAME}-payload
               key: payload
+        - name: LIBTPU_INIT_ARGS
+          value: "--xla_enable_custom_call_region_trace=true --xla_xprof_register_llo_debug_info=true"
         resources:
           limits:
             google.com/tpu: "4"
