@@ -95,6 +95,41 @@ Extract deep profiling metrics from `metadata.profile` (may be absent if profili
 - **Growing vliw_bundle_count + flat speedup** → Kernel complexity bloat. Simplify the algorithm.
 - **Low compute_efficiency_pct + high compute_ratio** → Near-peak VPU util but far from peak FLOPS. Check for unnecessary recomputation or register pressure.
 
+### Step 3b: Deep IR analysis (if available)
+
+Check if raw profile artifacts were downloaded to the iteration directory. These provide much richer optimization signals than the scalar metrics alone.
+
+**HLO IR (`iteration_{N}/hlo_post_opt.txt`)**
+
+If this file exists, read it and analyze:
+
+- **Fusion decisions**: Which ops were fused into the `tpu_custom_call`? Were any ops left unfused that could benefit from fusion?
+- **Memory layout**: Are there unnecessary transposes, copies, or layout conversions? Check for `transpose`, `copy`, or `bitcast` ops outside the fused region.
+- **Parameter shapes**: Verify that the tiling dimensions visible in HLO match the Pallas `BlockSpec` grid. Mismatches indicate suboptimal tiling.
+- **Constant folding**: Are there constants that could be folded at compile time but weren't?
+- **Redundant ops**: Look for `broadcast`, `reshape`, or `slice` chains that suggest the compiler couldn't simplify the data flow.
+
+**LLO IR (`iteration_{N}/llo_final.txt`)**
+
+If this file exists, read it and analyze:
+
+- **VLIW bundle density**: Are bundles densely packed (3-4 ops per `;;` block) or mostly single-op? Dense bundles mean the compiler is effectively utilizing instruction-level parallelism.
+- **MXU scheduling**: Where are `.mxu0`/`.mxu1` ops placed? Long gaps between MXU ops suggest pipeline bubbles. Consecutive MXU ops on both ports (`.mxu0` and `.mxu1` in the same bundle) indicate dual-MXU scheduling.
+- **Pipeline stalls**: Look for `nop` instructions or `wait` barriers. Multiple `nop`s in sequence indicate the compiler couldn't fill the pipeline.
+- **Register pressure**: Look for store/load patterns to VMEM (`.vmem_store` followed later by `.vmem_load` of the same address) — these indicate register spills.
+- **DMA scheduling**: Check for `dma.start` and `dma.done` pairs. Good pipelining has `dma.start` well ahead of the corresponding `dma.done`, overlapping with computation.
+
+**Trace Events (`iteration_{N}/trace_events.json`)**
+
+If this file exists, read it (it may be large — focus on events with `dur > 0` on the TPU device pid) and analyze:
+
+- **Event distribution**: What types of events dominate? Group by `name` and sum durations.
+- **Compute vs sync gaps**: Look for long `SyncWait` events between computation events. These represent times the TPU is idle waiting for data.
+- **DMA overlap**: Are there DMA transfer events running concurrently with computation events (overlapping `ts` + `dur` ranges)?
+- **Iteration consistency**: Are the 3 profiled iterations similar in timing, or is there variance suggesting cold-start effects?
+
+**Include IR-based findings in the analysis.md output.** When IR analysis reveals something the scalar metrics missed (e.g., register spills, missed fusions, pipeline bubbles), highlight it as a concrete optimization target with specific suggestions.
+
 ### Step 4: Trend analysis
 
 Read previous iteration results (if any) from `iteration_{N-1}/eval_result.json`, `iteration_{N-2}/eval_result.json`, etc.
@@ -182,4 +217,7 @@ Write `iteration_{N}/analysis.md`:
 
 ### Suggestions
 {Specific optimization suggestions based on multi-signal analysis}
+
+### IR Analysis (if available)
+{Specific findings from HLO/LLO/trace — e.g., "LLO shows 12 nop sequences averaging 4 nops each, indicating pipeline bubbles between DMA and MXU ops. Consider adding prefetch or increasing tile size to hide latency."}
 ```
