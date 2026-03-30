@@ -377,9 +377,11 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     mxu1_count = 0
 
     llo_files = glob.glob(str(llo_dir / "**" / "*.txt"), recursive=True)
+    llo_files += glob.glob(str(llo_dir / "**" / "*.llo"), recursive=True)
 
     # Parse filename pattern: {hash}-{op_name}-{pass_num}-{pass_name}.txt
-    file_re = re.compile(r"^\d+-(.+?)-(\d+)-(.+)\.txt$")
+    # Also accepts .llo extension and dotted naming conventions.
+    file_re = re.compile(r"^\d+-(.+?)-(\d+)-(.+)\.(?:txt|llo)$")
 
     # Strategy: find the largest file among Pallas kernel final passes.
     # Pallas ops are named pallas_tpu_*. Final passes include
@@ -387,8 +389,11 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     pallas_candidates = []
     other_candidates = []
     for f in llo_files:
-      m = file_re.match(os.path.basename(f))
+      basename = os.path.basename(f)
+      m = file_re.match(basename)
       if not m:
+        # Fallback: any LLO file is a candidate (sorted by size later)
+        other_candidates.append((f, basename, 0, ""))
         continue
       op_name = m.group(1)
       pass_num = int(m.group(2))
