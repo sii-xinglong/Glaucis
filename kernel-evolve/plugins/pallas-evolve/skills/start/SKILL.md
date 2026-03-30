@@ -61,6 +61,36 @@ Execute these steps in order:
      ```
    - Set `iteration = 0`
 
+10. **Baseline profiling (Round 0)**: Submit the unmodified template kernel for TPU evaluation to collect profiling artifacts:
+
+    a. Create the baseline evaluation directory:
+       ```
+       mkdir -p {run_dir}/iteration_0/variants/baseline/
+       cp {run_dir}/baseline_kernel.py {run_dir}/iteration_0/variants/baseline/kernel.py
+       ```
+
+    b. Invoke `pallas-evolve:submit` via the Skill tool. This will:
+       - Submit the baseline kernel as a single-variant batch
+       - Collect `eval_result.json` with performance metrics and deep profiling data
+       - Download `llo_final.txt`, `hlo_post_opt.txt`, `trace_events.json` from GCS
+
+    c. Copy results to a permanent baseline directory:
+       ```
+       mkdir -p {run_dir}/baseline/
+       cp {run_dir}/iteration_0/variants/baseline/* {run_dir}/baseline/
+       ```
+
+    d. **Generate baseline profile brief**: Read the raw profiling artifacts and write `{run_dir}/baseline/profile_brief.md`. See the **Profile Brief Generation** section below for the template and procedure.
+
+    e. **Commit and push baseline artifacts**:
+       ```bash
+       git add {run_dir}/baseline/
+       git commit -m "perf({kernel_name}): baseline profiling — Round 0 artifacts"
+       git push
+       ```
+
+    f. If the baseline evaluation fails (COMPILE_ERROR), stop and report the error — the template kernel itself is broken and must be fixed before optimization can begin.
+
 ## Optimization Loop
 
 For each round from 1 to `max_iterations`:
