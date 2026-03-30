@@ -40,6 +40,16 @@
 - **Config**: tiling = (1024, 256, 128, 1024, 256, 128, 512, 128, 128)
 - **Rule**: Larger M tiles help up to the point where VMEM is saturated.
 
+### SO5: BF16 tgmm — eliminate backward weight gradient quantization (1.733x speedup)
+- **What**: Skip quantizing drhs_dout and lhs_t for tgmm in backward. Pass bf16 grad and bf16 lhs_t directly to `tokamax_backend.tgmm()` instead of fp8-quantized tensors. Eliminates 2 `qpl.quantize()` calls from backward.
+- **Why**: On TPU v7x, bf16 matmul throughput for tgmm is comparable to fp8 throughput. The 2 quantization calls (absmax + scale + cast on VPU/SFU) have non-trivial cost that exceeds any throughput benefit of fp8 tgmm. Weight gradients (drhs) are less precision-sensitive, so bf16 is sufficient.
+- **Impact**: 1.733x speedup (5.93ms vs 10.28ms). +6.9% over SO4.
+- **Config**: tiling = (1024, 256, 128, 1024, 256, 128, 1024, 128, 128) with bf16 tgmm
+- **Profile**: VLIW bundles unchanged (18,172), MXU dual_ratio=1.0, compute_efficiency=12.05%
+- **Trade-off**: Weight gradients computed at bf16 precision instead of fp8. For training, bf16 is MORE precise than fp8, so this is actually beneficial for convergence.
+- **Rule**: When VPU quantization cost exceeds MXU throughput benefit, skip quantization and use bf16 directly. Particularly applicable to weight gradient (tgmm) computations.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 1
+
 ### FP4: stage_profile xprof trace returns zero-duration window
 - **What**: `stage_profile` reports `Invalid trace timing (total_time <= 0)` — xprof trace captures TPU events but the time window between the last two computation events has zero or negative duration.
 - **Why**: The profiled runs (3 iterations) may not produce distinct computation events with measurable gaps on v7x. Events may be merged/grouped by the trace processor, or `tpu_trace_mode=TRACE_COMPUTE_AND_SYNC` may not generate the expected event structure on Ironwood hardware.
@@ -68,3 +78,10 @@
 - **Root cause**: Tall-narrow tiles (M=2048, N=128) generate more complex VLIW code (+18.5% bundles: 18,172 → 21,525) and reduce compute efficiency (48.5% → 37.1%). M=2048 creates 16 sub-tile rows × 1 column, serializing the computation within each tile. M=1024, N=256 gives 8×2 sub-tiles enabling more instruction-level parallelism.
 - **Fix**: For fwd/bwd_gmm, prefer square-ish tile aspect ratios. (1024, 256) is optimal for the current shapes (M=8192, K=2048, N=512).
 - **First seen**: 2026-03-30, gmm_fp8_blockwise iteration 3
+
+### [FP8] Backward operation reordering (tgmm-first) does not improve performance
+- **Symptom**: Reordering backward to execute tgmm before bwd_gmm (with all quantization front-loaded) regresses from 1.621x to 1.529x (-5.7%)
+- **Root cause**: XLA schedules operations based on data dependencies, not Python source order. Changing the order of independent operations in Python doesn't meaningfully affect the compiled VLIW schedule. The regression likely stems from different register allocation choices caused by the altered operation order, resulting in slightly worse instruction packing.
+- **Fix**: Don't attempt to influence XLA scheduling by reordering independent operations in Python. Focus on reducing total work (fewer ops) rather than operation ordering.
+- **Evidence**: Both orderings produce identical VLIW bundle count (18,172) and MXU dual_ratio (1.0), confirming XLA normalizes the schedule. The 0.8ms latency difference comes from subtle register allocation effects.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 1
