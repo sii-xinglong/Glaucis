@@ -214,6 +214,20 @@
 - **Rule**: For grouped matmul with per-group M=256: use TM=256 for ALL gmm phases (fwd + bwd), TK=512 for ALL phases, TN=128. tgmm: TM=2048, TK=512, TN=128.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 4
 
+### SO13: Forward TN=256 — N-grid halving (2.769x speedup)
+- **What**: Increase forward TN from 128 to 256. Tiling: (256, 512, 256, 256, 512, 128, 2048, 512, 128).
+- **Why**: For Gate/Up (N=512), TN=256 halves N-grid from 4→2 tiles. For Down (N=2048), 16→8 tiles. Fewer grid iterations reduce kernel launch overhead. Same VLIW/MXU profile (23,462 bundles, 1,792 ops) but faster due to fewer grid iterations.
+- **Impact**: 2.769x speedup (~3.80ms). +4.5% over SO12 (2.651x). New overall best.
+- **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0, compute_efficiency=19.25%, spills=156
+- **Rule**: Forward TN=256 is safe and beneficial for these shapes. N=512 gives exactly 2 tiles (perfect), N=2048 gives 8 tiles.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 5
+
+### [FP16b] bwd_gmm TN=256 causes catastrophic register spills
+- **Symptom**: bwd_gmm TN=256 produces 9,447 register spills (60x increase from 156), regressing speedup from 2.651x to 2.295x (-13.4%).
+- **Root cause**: bwd_gmm with transpose_rhs=True creates intermediate tensors proportional to TN. TN=256 doubles the intermediate buffer size, overflowing register capacity. The compiler spills 9,447 vectors to VMEM.
+- **Fix**: bwd_gmm TN MUST stay at 128. Only forward gmm (transpose_rhs=False) benefits from TN=256.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 5
+
 ### [FP15] tgmm TN=256 halves MXU ops — regression like FP2
 - **Symptom**: tgmm TN=256 (vs TN=128) drops MXU ops from 1,792 to 1,024 (-43%), increases VLIW bundles from 23,462 to 24,465 (+4.3%), regresses speedup from 2.460x to 2.452x.
 - **Root cause**: Larger N tiles change the tgmm matmul decomposition, reducing the number of MXU operations per tile. Similar mechanism to FP2 (N>128 constraint) but for bf16 tgmm — even without fp8 scale issues, the larger N tiles produce suboptimal compilation.
