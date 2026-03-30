@@ -38,7 +38,7 @@ spec:
           (git clone "https://github.com/$REPO.git" /workspace && \
            cd /workspace && git checkout "$BRANCH")
           cd /workspace
-          python kernel-evolve/docker/evaluate.py --eval-payload "$EVAL_PAYLOAD"
+          python kernel-evolve/docker/evaluate.py --eval-payload-file /etc/eval-payload/payload
         env:
         - name: BRANCH
           value: "${BRANCH}"
@@ -48,11 +48,6 @@ spec:
           value: "tpu,cpu"
         - name: ENABLE_PJRT_COMPATIBILITY
           value: "true"
-        - name: EVAL_PAYLOAD
-          valueFrom:
-            configMapKeyRef:
-              name: ${JOB_NAME}-payload
-              key: payload
         - name: LIBTPU_INIT_ARGS
           value: "--xla_enable_custom_call_region_trace=true --xla_xprof_register_llo_debug_info=true"
         resources:
@@ -65,10 +60,16 @@ spec:
         volumeMounts:
         - name: dshm
           mountPath: /dev/shm
+        - name: eval-payload
+          mountPath: /etc/eval-payload
+          readOnly: true
       volumes:
       - name: dshm
         emptyDir:
           medium: Memory
+      - name: eval-payload
+        configMap:
+          name: ${JOB_NAME}-payload
       nodeSelector:
         cloud.google.com/gke-tpu-accelerator: tpu7x
         cloud.google.com/gke-tpu-topology: 2x2x1
