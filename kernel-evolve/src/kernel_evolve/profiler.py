@@ -8,6 +8,7 @@ Reference: accelerator-agents/MaxKernel/.../analyze_profile.py
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -340,3 +341,142 @@ def compute_derived_metrics(
     "arithmetic_intensity": arithmetic_intensity,
     "compute_efficiency_pct": compute_efficiency_pct,
   }
+
+
+# ---------------------------------------------------------------------------
+# IR dump file discovery and analysis
+# ---------------------------------------------------------------------------
+
+_PASS_NUM_RE = re.compile(r"pass[_.]?(\d+)")
+
+
+def find_final_llo_file(dump_dir: str) -> str | None:
+  """Find the highest-numbered LLO pass file in a dump directory.
+
+  LLO files match ``*.llo`` or ``*.llo.txt``. The pass number is extracted
+  from filenames like ``module.pass_79.llo`` using regex ``pass[_.]?(\\d+)``.
+  Returns the path with the highest pass number, or None if none found.
+  """
+  candidates: list[tuple[int, str]] = []
+  for pattern in ("**/*.llo", "**/*.llo.txt"):
+    for path in glob.glob(os.path.join(dump_dir, pattern), recursive=True):
+      m = _PASS_NUM_RE.search(os.path.basename(path))
+      if m:
+        candidates.append((int(m.group(1)), path))
+  if not candidates:
+    return None
+  candidates.sort(key=lambda t: t[0])
+  return candidates[-1][1]
+
+
+def find_hlo_file(dump_dir: str) -> str | None:
+  """Find an HLO text file in *dump_dir*.
+
+  Globs for ``*.txt`` and ``*.hlo``.  Prefers files whose names contain both
+  ``after`` and ``optimiz`` (post-optimization HLO).  Falls back to the
+  largest file by size.  Returns None if the directory is empty or missing.
+  """
+  if not os.path.isdir(dump_dir):
+    return None
+  hits: list[str] = []
+  for pattern in ("**/*.txt", "**/*.hlo"):
+    hits.extend(glob.glob(os.path.join(dump_dir, pattern), recursive=True))
+  if not hits:
+    return None
+  # Prefer post-optimization files
+  for path in hits:
+    name = os.path.basename(path).lower()
+    if "after" in name and "optimiz" in name:
+      return path
+  # Fall back to largest file
+  return max(hits, key=lambda p: os.path.getsize(p))
+
+
+def analyze_ir_dumps(hlo_dir: str, llo_dir: str) -> dict[str, Any]:
+  """Orchestrate IR analysis: VLIW bundles, MXU distribution, HBM bandwidth, FLOPs.
+
+  Reads the final LLO file from *llo_dir* and the best HLO file from
+  *hlo_dir*, then delegates to the per-metric parsers.
+
+  Returns a dict with keys ``vliw_bundle_count``, ``mxu_utilization``,
+  ``hbm_bandwidth_bytes``, and ``flops`` -- each ``None`` when the
+  corresponding file is missing or parsing fails.
+  """
+  vliw: int | None = None
+  mxu: dict | None = None
+  hbm: int | None = None
+  flops: float | None = None
+
+  llo_path = find_final_llo_file(llo_dir) if os.path.isdir(llo_dir) else None
+  if llo_path is not None:
+    llo_text = Path(llo_path).read_text()
+    vliw = count_vliw_bundles(llo_text)
+    mxu = parse_mxu_distribution(llo_text)
+
+  hlo_path = find_hlo_file(hlo_dir)
+  if hlo_path is not None:
+    hlo_text = Path(hlo_path).read_text()
+    hbm = estimate_hbm_bandwidth(hlo_text)
+    flops = count_flops_from_hlo(hlo_text)
+
+  return {
+    "vliw_bundle_count": vliw,
+    "mxu_utilization": mxu,
+    "hbm_bandwidth_bytes": hbm,
+    "flops": flops,
+  }
+
+
+def capture_ir_dumps(
+  kernel_fn,
+  shapes: dict[str, Any],
+  dump_dir: str,
+) -> tuple[str, str]:
+  """Run *kernel_fn* once with XLA/libtpu flags that dump IR artefacts.
+
+  Creates ``hlo/``, ``llo/``, and ``mosaic/`` subdirectories under
+  *dump_dir*, sets ``XLA_FLAGS`` and ``LIBTPU_INIT_ARGS`` to point the
+  compiler at those directories, executes the kernel, and restores the
+  original environment variables.
+
+  Returns ``(hlo_dir, llo_dir)`` paths.
+  """
+  hlo_dir = os.path.join(dump_dir, "hlo")
+  llo_dir = os.path.join(dump_dir, "llo")
+  mosaic_dir = os.path.join(dump_dir, "mosaic")
+  for d in (hlo_dir, llo_dir, mosaic_dir, dump_dir):
+    os.makedirs(d, exist_ok=True)
+
+  orig_xla = os.environ.get("XLA_FLAGS", "")
+  orig_libtpu = os.environ.get("LIBTPU_INIT_ARGS", "")
+
+  os.environ["XLA_FLAGS"] = (
+    f"--xla_dump_hlo_as_text --xla_dump_to={hlo_dir} "
+    + orig_xla
+  )
+  os.environ["LIBTPU_INIT_ARGS"] = (
+    f"--xla_jf_dump_to={llo_dir} "
+    f"--xla_jf_dump_hlo_text=true "
+    f"--xla_jf_dump_llo_text=true "
+    f"--xla_jf_emit_annotations=true "
+    f"--xla_mosaic_dump_to={mosaic_dir} "
+    f"--xla_mosaic_enable_llo_source_annotations=true "
+    + orig_libtpu
+  )
+
+  try:
+    out = kernel_fn(**shapes)
+    if hasattr(out, "block_until_ready"):
+      out.block_until_ready()
+  finally:
+    # Restore original env vars
+    if orig_xla:
+      os.environ["XLA_FLAGS"] = orig_xla
+    else:
+      os.environ.pop("XLA_FLAGS", None)
+    if orig_libtpu:
+      os.environ["LIBTPU_INIT_ARGS"] = orig_libtpu
+    else:
+      os.environ.pop("LIBTPU_INIT_ARGS", None)
+
+  return hlo_dir, llo_dir

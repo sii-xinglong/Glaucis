@@ -1,17 +1,22 @@
 """Tests for the XPlane trace profiler module."""
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from kernel_evolve.profiler import (
+  analyze_ir_dumps,
   analyze_trace,
+  capture_ir_dumps,
   capture_trace,
   compute_derived_metrics,
   count_flops_from_hlo,
   count_vliw_bundles,
   estimate_hbm_bandwidth,
+  find_final_llo_file,
+  find_hlo_file,
   parse_mxu_distribution,
   stage_profile,
 )
@@ -271,3 +276,76 @@ def test_compute_derived_metrics_missing_data():
   result = compute_derived_metrics(None, None, 0.5)
   assert result["arithmetic_intensity"] is None
   assert result["compute_efficiency_pct"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: find_final_llo_file
+# ---------------------------------------------------------------------------
+
+
+def test_find_final_llo_file(tmp_path):
+  (tmp_path / "module.pass_02.llo").write_text("early pass")
+  (tmp_path / "module.pass_45.llo").write_text("middle pass")
+  (tmp_path / "module.pass_79.llo").write_text("final pass content")
+  result = find_final_llo_file(str(tmp_path))
+  assert result is not None
+  assert "pass_79" in result
+
+
+def test_find_final_llo_file_empty_dir(tmp_path):
+  assert find_final_llo_file(str(tmp_path)) is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: find_hlo_file
+# ---------------------------------------------------------------------------
+
+
+def test_find_hlo_file(tmp_path):
+  (tmp_path / "module.after_all_optimizations.txt").write_text("HLO content")
+  (tmp_path / "module.before_optimizations.txt").write_text("early HLO")
+  result = find_hlo_file(str(tmp_path))
+  assert result is not None
+
+
+def test_find_hlo_file_empty_dir(tmp_path):
+  assert find_hlo_file(str(tmp_path)) is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: analyze_ir_dumps
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_ir_dumps(tmp_path):
+  llo_dir = tmp_path / "llo"
+  llo_dir.mkdir()
+  (llo_dir / "module.pass_79.llo").write_text(LLO_TEXT_FIXTURE)
+  hlo_dir = tmp_path / "hlo"
+  hlo_dir.mkdir()
+  (hlo_dir / "module.after_all_optimizations.txt").write_text(HLO_TEXT_FIXTURE)
+  result = analyze_ir_dumps(str(hlo_dir), str(llo_dir))
+  assert result["vliw_bundle_count"] == 4
+  assert result["mxu_utilization"]["mxu0"] == 2
+  assert result["hbm_bandwidth_bytes"] == 16777216
+
+
+def test_analyze_ir_dumps_empty_dirs(tmp_path):
+  result = analyze_ir_dumps(str(tmp_path / "hlo"), str(tmp_path / "llo"))
+  assert result["vliw_bundle_count"] is None
+  assert result["mxu_utilization"] is None
+  assert result["hbm_bandwidth_bytes"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: capture_ir_dumps
+# ---------------------------------------------------------------------------
+
+
+@patch.dict("os.environ", {}, clear=False)
+def test_capture_ir_dumps_sets_env_and_runs(tmp_path):
+  mock_kernel = MagicMock(return_value=MagicMock(block_until_ready=MagicMock()))
+  dump_dir = str(tmp_path / "dumps")
+  capture_ir_dumps(mock_kernel, {"M": 64}, dump_dir)
+  assert mock_kernel.called
+  assert os.path.isdir(dump_dir)
