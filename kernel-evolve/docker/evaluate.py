@@ -18,9 +18,9 @@ import numpy as np
 
 
 def upload_to_gcs(
-    job_name: str,
-    artifacts: dict[str, str],
-    bucket_name: str = "glaucis-profiles",
+  job_name: str,
+  artifacts: dict[str, str],
+  bucket_name: str = "glaucis-profiles",
 ) -> dict[str, Any]:
   """Upload profile artifacts to GCS. Non-fatal — never raises."""
   prefix = f"gs://{bucket_name}/{job_name}"
@@ -52,9 +52,9 @@ def decode_request(b64_payload: str) -> dict[str, Any]:
 
 
 def _resolve_compute_fn(
-    exec_globals: dict[str, Any],
-    *,
-    allow_reference: bool = False,
+  exec_globals: dict[str, Any],
+  *,
+  allow_reference: bool = False,
 ):
   names = ["optimized_compute", "kernel_fn"]
   if allow_reference:
@@ -69,6 +69,7 @@ def _resolve_compute_fn(
 def _has_tpu() -> bool:
   try:
     import jax
+
     devices = jax.devices()
     print(f"JAX devices: {devices}", file=sys.stderr)
     return any(d.platform == "tpu" for d in devices)
@@ -188,9 +189,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       return {"ok": False, "error": "No .xplane.pb file generated"}
 
     # Parse trace using xprof
-    tool_data_result, _ = raw_to_tool_data.xspace_to_tool_data(
-      [xplane_path], "trace_viewer", {}
-    )
+    tool_data_result, _ = raw_to_tool_data.xspace_to_tool_data([xplane_path], "trace_viewer", {})
     trace_data = json.loads(tool_data_result)
     events = trace_data.get("traceEvents", [])
 
@@ -239,8 +238,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
       if name and "dur" in event:
         all_event_names.add(name)
       # Match jit_computation, pallas_call, or any XLA computation
-      if ("jit_computation" in name or "jit(" in name
-          or "pallas" in name.lower()):
+      if "jit_computation" in name or "jit(" in name or "pallas" in name.lower():
         if "dur" in event:
           computation_events.append(event)
 
@@ -331,13 +329,20 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
     from pathlib import Path
 
     _DTYPE_BYTES = {
-      "f32": 4, "float32": 4,
-      "f16": 2, "float16": 2,
-      "bf16": 2, "bfloat16": 2,
-      "f8e5m2": 1, "f8e4m3fn": 1,
-      "s32": 4, "int32": 4,
-      "s16": 2, "int16": 2,
-      "s8": 1, "int8": 1,
+      "f32": 4,
+      "float32": 4,
+      "f16": 2,
+      "float16": 2,
+      "bf16": 2,
+      "bfloat16": 2,
+      "f8e5m2": 1,
+      "f8e4m3fn": 1,
+      "s32": 4,
+      "int32": 4,
+      "s16": 2,
+      "int16": 2,
+      "s8": 1,
+      "int8": 1,
     }
 
     dump_path = Path(dump_dir)
@@ -362,8 +367,7 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
         flops = 6.0 * M * K * N * G
 
     # Log dump file counts
-    for label, d in [("hlo", hlo_dir), ("llo", llo_dir),
-                     ("mosaic", dump_path / "mosaic")]:
+    for label, d in [("hlo", hlo_dir), ("llo", llo_dir), ("mosaic", dump_path / "mosaic")]:
       d_path = Path(d)
       count = sum(1 for _ in d_path.rglob("*") if _.is_file()) if d_path.exists() else 0
       print(f"Dump dir [{label}]: {count} files", file=sys.stderr)
@@ -429,9 +433,13 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
         bundle_count = len(re.findall(r"\bbundle\s+\d+", llo_text, re.IGNORECASE))
       if bundle_count == 0:
         # Last resort: count instruction-like lines (register assignments)
-        bundle_count = len(re.findall(
-          r"^\s*%\w+\s*=", llo_text, re.MULTILINE,
-        ))
+        bundle_count = len(
+          re.findall(
+            r"^\s*%\w+\s*=",
+            llo_text,
+            re.MULTILINE,
+          )
+        )
       if bundle_count > 0:
         vliw_bundle_count = bundle_count
       # Count MXU operations — multiple naming conventions
@@ -626,10 +634,7 @@ def _setup_dump_env():
   os.makedirs(f"{dump_dir}/llo", exist_ok=True)
   os.makedirs(f"{dump_dir}/mosaic", exist_ok=True)
 
-  os.environ["XLA_FLAGS"] = (
-    f"--xla_dump_hlo_as_text --xla_dump_to={dump_dir}/hlo "
-    + os.environ.get("XLA_FLAGS", "")
-  )
+  os.environ["XLA_FLAGS"] = f"--xla_dump_hlo_as_text --xla_dump_to={dump_dir}/hlo " + os.environ.get("XLA_FLAGS", "")
   os.environ["LIBTPU_INIT_ARGS"] = (
     f"--xla_jf_dump_to={dump_dir}/llo "
     "--xla_jf_dump_hlo_text=true "
@@ -638,8 +643,7 @@ def _setup_dump_env():
     f"--xla_mosaic_dump_to={dump_dir}/mosaic "
     "--xla_mosaic_enable_llo_source_annotations=true "
     "--xla_enable_custom_call_region_trace=true "
-    "--xla_xprof_register_llo_debug_info=true "
-    + os.environ.get("LIBTPU_INIT_ARGS", "")
+    "--xla_xprof_register_llo_debug_info=true " + os.environ.get("LIBTPU_INIT_ARGS", "")
   )
 
 
@@ -658,12 +662,16 @@ def main():
 
   compile_result = stage_compile(request["kernel_code"])
   if not compile_result["ok"]:
-    print(f'EVAL_RESULT:{json.dumps({"status": "COMPILE_ERROR", "error": compile_result["error"]})}')
+    print(f"EVAL_RESULT:{json.dumps({'status': 'COMPILE_ERROR', 'error': compile_result['error']})}")
     sys.exit(0)
 
   correct_result = stage_correctness(
-    request["kernel_code"], request["reference_code"], request["shapes"],
-    request.get("rtol", 1e-2), request.get("atol", 1e-2), compile_result["globals"],
+    request["kernel_code"],
+    request["reference_code"],
+    request["shapes"],
+    request.get("rtol", 1e-2),
+    request.get("atol", 1e-2),
+    compile_result["globals"],
   )
   if not correct_result["ok"]:
     result_data = {
@@ -676,7 +684,7 @@ def main():
 
   perf_result = stage_performance(compile_result["globals"], request["shapes"])
   if not perf_result["ok"]:
-    print(f'EVAL_RESULT:{json.dumps({"status": "COMPILE_ERROR", "error": perf_result["error"]})}')
+    print(f"EVAL_RESULT:{json.dumps({'status': 'COMPILE_ERROR', 'error': perf_result['error']})}")
     sys.exit(0)
 
   ref_compile = stage_compile(request["reference_code"])
