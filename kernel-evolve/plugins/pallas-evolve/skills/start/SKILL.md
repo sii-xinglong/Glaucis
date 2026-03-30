@@ -258,13 +258,15 @@ Before generating variants, read the previous round's best variant's raw profili
 Generate N variants from the baseline kernel, each exploring a DIFFERENT technical direction from the `diversity_directions` list:
 
 1. Re-read AGENT.md failure patterns and successful optimizations
-2. Prepare shared context for sub-agents: read the template kernel content and AGENT.md content into variables
+2. Prepare shared context for sub-agents: read the template kernel content, AGENT.md content, and **profile brief content** (from Phase 0) into variables
 3. **Dispatch N sub-agents in parallel** (one Agent tool call per direction, all in a single message):
    Each sub-agent receives a prompt containing:
    - The full template kernel content
    - The AGENT.md failure patterns and successful optimizations
    - Its assigned direction name (e.g., `hbm_compute_overlap`)
    - The TPU v7x hard rules and optimization knowledge from this skill
+   - **The profile brief content** (full text of `iteration_1/profile_brief.md` generated in Phase 0), including hardware utilization, bottleneck diagnosis, LLO key observations, and optimization priorities
+   - **Direction-specific guidance**: Based on the profile brief's bottleneck diagnosis, explain how this sub-agent's assigned direction relates to the identified bottleneck. For example: "The profile shows compute_ratio=0.35 (memory-bound) with no double buffering. Your direction `hbm_compute_overlap` should focus on adding DMA prefetch to hide the 65% memory transfer time visible in the LLO trace."
    - The output path: `iteration_1/variants/{direction_name}/kernel.py`
    - Instructions to:
      - Design an optimization approach specific to its assigned direction
@@ -272,7 +274,7 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
      - Replace only the code between `# EVOLVE-BLOCK-START` and `# EVOLVE-BLOCK-END`
      - Preserve function signatures
      - Validate: the file must be valid Python (no syntax errors)
-     - Return a summary: approach taken, expected impact, key changes
+     - Return a summary: approach taken, **which profile signal motivated this approach**, expected impact on the identified bottleneck, **which hw utilization metric is expected to improve**, key changes
 4. Collect the returned summaries from all sub-agents and write `iteration_1/strategy.md`:
    ```markdown
    ## Round 1 Strategy
@@ -282,8 +284,10 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
 
    ### Variant: {direction_1}
    **Technical direction**: {direction_name}
+   **Profile motivation**: {which profile signal drove this approach}
    **Approach**: {specific optimization technique}
-   **Expected impact**: {why this should improve performance}
+   **Expected impact**: {why this should improve performance, referencing profile metrics}
+   **Target metric improvement**: {e.g., "compute_ratio 0.35 → 0.60+", "dual_ratio 0.3 → 0.8+"}
    **Key changes**: {summary of code changes}
 
    ### Variant: {direction_2}
@@ -305,9 +309,11 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
    - The AGENT.md failure patterns and successful optimizations
    - Its assigned direction and lineage context (lineage ID, previous best speedup, prior direction)
    - The TPU v7x hard rules and optimization knowledge from this skill
+   - **The profile brief content** (full text of `iteration_{N}/profile_brief.md`), including the delta vs baseline table, hardware utilization, bottleneck diagnosis, and LLO key observations
+   - **Direction-specific guidance**: Based on the profile brief's bottleneck diagnosis, explain how this sub-agent's assigned direction relates to the identified bottleneck and what changed since the previous round
    - The output path: `iteration_{N}/variants/{variant_name}/kernel.py`
    - Same mutation instructions as Round 1
-   - Return a summary: approach taken, expected impact, key changes
+   - Return a summary: approach taken, **which profile signal motivated this approach**, expected impact on the identified bottleneck, **which hw utilization metric is expected to improve**, key changes
 7. Collect the returned summaries from all sub-agents and write `iteration_{N}/strategy.md`:
    ```markdown
    ## Round {N} Strategy
@@ -321,8 +327,10 @@ Generate N variants from the baseline kernel, each exploring a DIFFERENT technic
    #### Variant: {L_id}_{direction_1}
    **Base kernel**: {lineage best_kernel path}
    **Technical direction**: {direction_name}
+   **Profile motivation**: {which profile signal drove this approach}
    **Approach**: {specific optimization technique}
-   **Expected impact**: {why this should improve performance}
+   **Expected impact**: {why this should improve performance, referencing profile metrics}
+   **Target metric improvement**: {e.g., "compute_ratio 0.35 → 0.60+", "dual_ratio 0.3 → 0.8+"}
 
    #### Variant: {L_id}_{direction_2}
    ...
