@@ -373,6 +373,7 @@ Before compacting, verify all critical state is persisted to files:
 - `lineages.json` is up to date (written by analyze)
 - All `eval_result.json` files exist for each variant
 - `strategy.md`, `batch_analysis.md`, `selection.md` are written
+- `profile_brief.md` exists for the current iteration (written by Phase 0)
 - AGENT.md is updated (written by reflect)
 
 Then invoke `/compact` to compress conversation context. After compaction, the loop will reconstruct state from files.
