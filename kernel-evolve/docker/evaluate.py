@@ -748,4 +748,27 @@ def main():
 
 
 if __name__ == "__main__":
-  main()
+  # Parse payload to check for batch mode BEFORE setting up dump env.
+  # In batch mode, subprocesses each set their own dump env.
+  _parser = argparse.ArgumentParser()
+  _parser.add_argument("--eval-payload", required=True)
+  _args = _parser.parse_args()
+  _request = decode_request(_args.eval_payload)
+
+  if _request.get("batch"):
+    # Batch mode: check TPU once, then dispatch subprocesses
+    if not _has_tpu():
+      print("ERROR: No TPU detected.", file=sys.stderr)
+      sys.exit(1)
+    from kernel_evolve.docker_evaluate_helpers import batch_dispatch
+
+    result_lines = batch_dispatch(
+      _request,
+      evaluator_script=__file__,
+      per_variant_timeout=300,
+    )
+    for line in result_lines:
+      print(line)
+  else:
+    # Single-variant mode: original path
+    main()
