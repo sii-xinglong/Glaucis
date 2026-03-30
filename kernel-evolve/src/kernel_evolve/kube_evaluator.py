@@ -108,6 +108,9 @@ class KubeEvaluator(Evaluator):
 
   async def _poll_job(self, job_name: str) -> str:
     deadline = time.monotonic() + self._config.timeout
+    return await self._poll_until(job_name, deadline)
+
+  async def _poll_until(self, job_name: str, deadline: float) -> str:
     while time.monotonic() < deadline:
       stdout, _, rc = await self._run_kubectl(
         "get",
@@ -202,7 +205,11 @@ class KubeEvaluator(Evaluator):
     for line in logs.split("\n"):
       if "EVAL_RESULT:" in line:
         json_str = line.split("EVAL_RESULT:", 1)[1].strip()
-        eval_result = EvalResult.from_dict(json.loads(json_str))
+        try:
+          eval_result = EvalResult.from_dict(json.loads(json_str))
+        except json.JSONDecodeError:
+          print(f"Malformed EVAL_RESULT line: {json_str[:200]}", file=sys.stderr)
+          continue
         break
 
     # Download GCS artifacts if available
@@ -244,10 +251,9 @@ class KubeEvaluator(Evaluator):
       error_result = EvalResult.compile_error(f"Failed to submit batch job: {e}")
       return BatchEvalResult(results={v["variant_id"]: error_result for v in batch_request.variants})
 
-    original_timeout = self._config.timeout
-    self._config.timeout = 300 * len(batch_request.variants) + 300
-    status = await self._poll_job(job_name)
-    self._config.timeout = original_timeout
+    batch_timeout = 300 * len(batch_request.variants) + 300
+    deadline = time.monotonic() + batch_timeout
+    status = await self._poll_until(job_name, deadline)
 
     if status not in ("Complete", "Failed"):
       await self._cleanup(job_name)
@@ -260,7 +266,11 @@ class KubeEvaluator(Evaluator):
     for line in logs.split("\n"):
       if "EVAL_RESULT:" in line:
         json_str = line.split("EVAL_RESULT:", 1)[1].strip()
-        data = json.loads(json_str)
+        try:
+          data = json.loads(json_str)
+        except json.JSONDecodeError:
+          print(f"Malformed EVAL_RESULT line: {json_str[:200]}", file=sys.stderr)
+          continue
         variant_id = data.get("variant_id", "unknown")
         results[variant_id] = EvalResult.from_dict(data)
 
