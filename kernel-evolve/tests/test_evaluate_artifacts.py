@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add the docker dir to path so we can import evaluate
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "docker"))
@@ -207,3 +207,75 @@ def test_trace_events_json_roundtrip(tmp_path):
   loaded = json.loads(path.read_text())
   assert len(loaded) == 2
   assert loaded[0]["name"] == "op1"
+
+
+def test_upload_to_gcs_success(tmp_path):
+    """upload_to_gcs uploads files and returns uploaded list."""
+    from evaluate import upload_to_gcs
+
+    hlo = tmp_path / "hlo.txt"
+    hlo.write_text("HLO content")
+    llo = tmp_path / "llo.txt"
+    llo.write_text("LLO content")
+
+    mock_blob = MagicMock()
+    mock_bucket = MagicMock()
+    mock_bucket.blob.return_value = mock_blob
+    mock_client = MagicMock()
+    mock_client.bucket.return_value = mock_bucket
+
+    with patch("evaluate.storage") as mock_storage:
+        mock_storage.Client.return_value = mock_client
+        result = upload_to_gcs("test-job", {
+            "hlo_post_opt.txt": str(hlo),
+            "llo_final.txt": str(llo),
+        })
+
+    assert result["ok"] is True
+    assert set(result["uploaded"]) == {"hlo_post_opt.txt", "llo_final.txt"}
+    assert result["gcs_prefix"] == "gs://glaucis-profiles/test-job"
+    assert mock_blob.upload_from_filename.call_count == 2
+
+
+def test_upload_to_gcs_missing_file(tmp_path):
+    """upload_to_gcs skips files that don't exist."""
+    from evaluate import upload_to_gcs
+
+    existing = tmp_path / "exists.txt"
+    existing.write_text("content")
+
+    mock_blob = MagicMock()
+    mock_bucket = MagicMock()
+    mock_bucket.blob.return_value = mock_blob
+    mock_client = MagicMock()
+    mock_client.bucket.return_value = mock_bucket
+
+    with patch("evaluate.storage") as mock_storage:
+        mock_storage.Client.return_value = mock_client
+        result = upload_to_gcs("test-job", {
+            "exists.txt": str(existing),
+            "missing.txt": "/nonexistent/path.txt",
+        })
+
+    assert result["ok"] is True
+    assert result["uploaded"] == ["exists.txt"]
+    assert mock_blob.upload_from_filename.call_count == 1
+
+
+def test_upload_to_gcs_all_fail():
+    """upload_to_gcs returns ok=False when all uploads fail."""
+    from evaluate import upload_to_gcs
+    result = upload_to_gcs("test-job", {
+        "a.txt": "/nonexistent/a.txt",
+        "b.txt": "/nonexistent/b.txt",
+    })
+    assert result["ok"] is False
+    assert result["uploaded"] == []
+
+
+def test_upload_to_gcs_empty_artifacts():
+    """upload_to_gcs handles empty artifact dict."""
+    from evaluate import upload_to_gcs
+    result = upload_to_gcs("test-job", {})
+    assert result["ok"] is False
+    assert result["uploaded"] == []

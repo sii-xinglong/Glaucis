@@ -9,7 +9,42 @@ import time
 import traceback
 from typing import Any
 
+try:
+  from google.cloud import storage
+except ImportError:
+  storage = None
+
 import numpy as np
+
+
+def upload_to_gcs(
+    job_name: str,
+    artifacts: dict[str, str],
+    bucket_name: str = "glaucis-profiles",
+) -> dict[str, Any]:
+  """Upload profile artifacts to GCS. Non-fatal — never raises."""
+  prefix = f"gs://{bucket_name}/{job_name}"
+  uploaded: list[str] = []
+  if not artifacts:
+    return {"ok": False, "uploaded": uploaded, "gcs_prefix": prefix}
+  if storage is None:
+    print("google-cloud-storage not installed, skipping GCS upload", file=sys.stderr)
+    return {"ok": False, "uploaded": uploaded, "gcs_prefix": prefix}
+  try:
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    for name, local_path in artifacts.items():
+      if not os.path.exists(local_path):
+        continue
+      try:
+        blob = bucket.blob(f"{job_name}/{name}")
+        blob.upload_from_filename(local_path)
+        uploaded.append(name)
+      except Exception as e:
+        print(f"GCS upload failed for {name}: {e}", file=sys.stderr)
+  except Exception as e:
+    print(f"GCS client init failed: {e}", file=sys.stderr)
+  return {"ok": len(uploaded) > 0, "uploaded": uploaded, "gcs_prefix": prefix}
 
 
 def decode_request(b64_payload: str) -> dict[str, Any]:
