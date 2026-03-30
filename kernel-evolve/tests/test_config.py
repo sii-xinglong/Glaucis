@@ -116,6 +116,12 @@ def test_batch_config_defaults():
   assert cfg.batch.diversity_directions == []
 
 
+def test_load_matmul_config_has_batch(example_config_path):
+  cfg = load_config(example_config_path)
+  assert cfg.batch.variants_per_round == 5
+  assert cfg.batch.top_k == 2
+
+
 def test_batch_config_loaded_from_yaml(tmp_path):
   yaml_content = """
 kernel:
