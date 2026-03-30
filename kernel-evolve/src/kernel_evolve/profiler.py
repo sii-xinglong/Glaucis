@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import traceback
+from functools import reduce
 from pathlib import Path
 from typing import Any
 
@@ -166,3 +168,175 @@ def stage_profile(
     }
   except Exception:
     return {"ok": False, "error": f"Profile error: {traceback.format_exc()}"}
+
+
+# ---------------------------------------------------------------------------
+# IR text parsing functions (no TPU/JAX dependency)
+# ---------------------------------------------------------------------------
+
+_DTYPE_BYTES: dict[str, int] = {
+  "pred": 1,
+  "s8": 1,
+  "u8": 1,
+  "s16": 2,
+  "u16": 2,
+  "f16": 2,
+  "bf16": 2,
+  "s32": 4,
+  "u32": 4,
+  "f32": 4,
+  "s64": 8,
+  "u64": 8,
+  "f64": 8,
+}
+
+
+def _shape_bytes(shape_str: str) -> int | None:
+  """Parse a shape like 'bf16[8,2048,128]' and return total bytes."""
+  m = re.match(r"(\w+)\[([^\]]+)\]", shape_str.strip())
+  if m is None:
+    return None
+  dtype = m.group(1)
+  if dtype not in _DTYPE_BYTES:
+    return None
+  dims = [int(d.strip()) for d in m.group(2).split(",")]
+  return _DTYPE_BYTES[dtype] * reduce(lambda a, b: a * b, dims)
+
+
+def count_vliw_bundles(llo_text: str) -> int | None:
+  """Count VLIW bundles in LLO text IR.
+
+  Bundles are separated by ';;' in LLO output. Returns None if no bundles found.
+  """
+  if not llo_text:
+    return None
+  count = llo_text.count(";;")
+  return count if count > 0 else None
+
+
+def parse_mxu_distribution(llo_text: str) -> dict | None:
+  """Count .mxu0 vs .mxu1 operations in LLO text.
+
+  Returns {"mxu0": int, "mxu1": int, "dual_ratio": float} where dual_ratio = min/max.
+  Returns None if no MXU ops found.
+  """
+  mxu0 = len(re.findall(r"\.mxu0\b", llo_text))
+  mxu1 = len(re.findall(r"\.mxu1\b", llo_text))
+  if mxu0 == 0 and mxu1 == 0:
+    return None
+  hi = max(mxu0, mxu1)
+  lo = min(mxu0, mxu1)
+  return {
+    "mxu0": mxu0,
+    "mxu1": mxu1,
+    "dual_ratio": lo / hi if hi > 0 else 0.0,
+  }
+
+
+def estimate_hbm_bandwidth(hlo_text: str) -> int | None:
+  """Parse first tpu_custom_call in HLO text, sum input + output bytes from shapes.
+
+  Returns total bytes transferred or None if no tpu_custom_call found.
+  """
+  # Find the first custom-call line targeting tpu_custom_call
+  cc_match = re.search(
+    r"%\S+\s*=\s*(\w+\[[^\]]+\])\s+custom-call\(([^)]*)\).*?custom_call_target=\"tpu_custom_call\"",
+    hlo_text,
+  )
+  if cc_match is None:
+    return None
+
+  output_shape_str = cc_match.group(1)
+  args_str = cc_match.group(2)
+
+  total = 0
+
+  # Sum output bytes
+  out_bytes = _shape_bytes(output_shape_str)
+  if out_bytes is not None:
+    total += out_bytes
+
+  # Sum input bytes — resolve each %arg to its parameter shape
+  arg_names = [a.strip() for a in args_str.split(",") if a.strip()]
+  for arg_name in arg_names:
+    # Find the parameter definition for this arg
+    param_pattern = re.escape(arg_name) + r"\s*=\s*(\w+\[[^\]]+\])"
+    param_match = re.search(param_pattern, hlo_text)
+    if param_match:
+      b = _shape_bytes(param_match.group(1))
+      if b is not None:
+        total += b
+
+  return total if total > 0 else None
+
+
+def count_flops_from_hlo(hlo_text: str) -> float | None:
+  """Parse dot operations in HLO and compute FLOPs.
+
+  FLOPs = 2 * product(output_dims) * product(contracting_dims).
+  Returns None if no dot operations found.
+  """
+  # Pattern: %name = dtype[dims] dot(%a, %b), lhs_contracting_dims={d1}, rhs_contracting_dims={d2}
+  dot_pattern = re.compile(
+    r"%\S+\s*=\s*\w+\[([^\]]+)\]\s+dot\([^)]+\)"
+    r".*?lhs_contracting_dims=\{([^}]*)\}"
+    r".*?rhs_contracting_dims=\{([^}]*)\}"
+  )
+
+  total_flops = 0.0
+  found = False
+
+  for m in dot_pattern.finditer(hlo_text):
+    found = True
+    output_dims = [int(d.strip()) for d in m.group(1).split(",")]
+    lhs_contracting = [int(d.strip()) for d in m.group(2).split(",") if d.strip()]
+
+    # We need contracting dim sizes. Look up from the lhs operand.
+    # Find the dot line to extract the lhs operand name
+    dot_line_match = re.search(
+      r"(%\S+)\s*=\s*\w+\[" + re.escape(m.group(1)) + r"\]\s+dot\((%\S+),",
+      hlo_text,
+    )
+    if dot_line_match is None:
+      continue
+
+    lhs_name = dot_line_match.group(2)
+    # Find the shape of lhs operand
+    lhs_shape_match = re.search(re.escape(lhs_name) + r"\s*=\s*\w+\[([^\]]+)\]", hlo_text)
+    if lhs_shape_match is None:
+      continue
+
+    lhs_dims = [int(d.strip()) for d in lhs_shape_match.group(1).split(",")]
+    contracting_sizes = [lhs_dims[i] for i in lhs_contracting if i < len(lhs_dims)]
+
+    output_product = reduce(lambda a, b: a * b, output_dims)
+    contracting_product = reduce(lambda a, b: a * b, contracting_sizes) if contracting_sizes else 1
+    total_flops += 2.0 * output_product * contracting_product
+
+  return total_flops if found else None
+
+
+def compute_derived_metrics(
+  flops: float | None,
+  hbm_bytes: int | None,
+  latency_ms: float,
+  peak_flops_per_sec: float = 275e12,
+) -> dict:
+  """Compute arithmetic intensity and compute efficiency.
+
+  Returns {"arithmetic_intensity": float|None, "compute_efficiency_pct": float|None}.
+  """
+  arithmetic_intensity = None
+  compute_efficiency_pct = None
+
+  if flops is not None and hbm_bytes is not None and hbm_bytes > 0:
+    arithmetic_intensity = flops / hbm_bytes
+
+  if flops is not None and latency_ms > 0 and peak_flops_per_sec > 0:
+    actual_flops_per_sec = flops / (latency_ms / 1000.0)
+    compute_efficiency_pct = (actual_flops_per_sec / peak_flops_per_sec) * 100.0
+
+  return {
+    "arithmetic_intensity": arithmetic_intensity,
+    "compute_efficiency_pct": compute_efficiency_pct,
+  }
