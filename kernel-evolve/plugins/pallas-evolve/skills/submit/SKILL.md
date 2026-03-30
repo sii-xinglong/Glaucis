@@ -144,6 +144,31 @@ If no `EVAL_RESULT:` line is found, save a synthetic error result:
 }
 ```
 
+### Step 8b: Download profile artifacts
+
+If the eval result contains an `artifacts_gcs_prefix` in metadata, download the raw IR and trace files locally:
+
+```bash
+GCS_PREFIX=$(python3 -c "
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(r.get('metadata', {}).get('artifacts_gcs_prefix', ''))
+" "iteration_{N}/eval_result.json")
+
+if [ -n "$GCS_PREFIX" ]; then
+  gcloud storage cp "${GCS_PREFIX}/*" "iteration_{N}/" 2>/dev/null && \
+    echo "Downloaded artifacts from ${GCS_PREFIX}" || \
+    echo "Artifact download skipped (GCS not configured or empty)"
+fi
+```
+
+This downloads up to three files into `iteration_{N}/`:
+- `hlo_post_opt.txt` — Post-optimization HLO IR text
+- `llo_final.txt` — Final-pass LLO IR text with VLIW bundles
+- `trace_events.json` — Expanded XPlane trace events (Chrome trace format)
+
+These files are optional. If download fails, the analyze skill falls back to metrics-only analysis.
+
 ### Step 9: Cleanup
 
 Always clean up, even on failure:
