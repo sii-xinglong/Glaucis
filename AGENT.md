@@ -117,6 +117,43 @@
 - **Fix**: Forward lhs MUST be quantized to fp8 when rhs is fp8. Mixed precision (bf16 lhs + fp8 rhs) is ONLY valid for backward gmm (transpose_rhs=True). Do NOT skip forward lhs quantization.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise session 2, round 1
 
+### [FP16] emit_pipeline body function must match in_specs ref count
+- **Symptom**: `TypeError: pipeline_body() missing 1 required positional argument: 'v_tile_ref'` when using `pltpu.emit_pipeline` in Pallas kernel.
+- **Root cause**: `emit_pipeline` passes scratch refs to the body function based on the `in_specs` count. If `in_specs` declares N input BlockSpecs, the body function receives N positional ref arguments. A body function expecting `(i_t, k_tile_ref, v_tile_ref)` with only 1 in_spec will fail because pipeline only passes 1 ref.
+- **Fix**: Ensure `pipeline_body` signature matches: one ref argument per `in_specs` entry, plus any `out_specs` refs. Use `*refs` for variable-length if needed.
+- **First seen**: 2026-03-30, chunk_gla optimization round 1
+
+### [FP17] BlockSpec dimensions must match array dimensions after layout changes
+- **Symptom**: `ValueError: Block shape (= (Blocked(block_size=1), Blocked(block_size=1), Blocked(block_size=64), Blocked(block_size=128))) must have the same number of dimensions as the array shape (2, 16, 64, 64, 128)` when changing memory layout.
+- **Root cause**: After reshaping an input array (e.g., from 4D to 5D by splitting a dimension), the corresponding `BlockSpec` in `in_specs` must be updated to match the new dimensionality. A 4D BlockSpec `(1, 1, 64, 128)` cannot index a 5D array `(2, 16, 64, 64, 128)`.
+- **Fix**: When changing input array shapes/layouts, ALWAYS update the corresponding BlockSpec dimensions to match. Verify ndim(BlockSpec.block_shape) == ndim(array) for every in_spec/out_spec.
+- **First seen**: 2026-03-30, chunk_gla optimization round 1
+
+### [FP18] Source-level operation reordering does not affect Pallas/Mosaic VLIW scheduling
+- **Symptom**: Restructuring Pallas kernel code to separate VPU and MXU operations into explicit phases produces identical compiled VLIW bundle count (8270) and identical MXU ops (4656) as baseline.
+- **Root cause**: The Mosaic compiler (like XLA) schedules operations based on the dataflow graph, not source order. Reordering independent operations in Python has no effect on the compiled TPU schedule. The compiler independently determines optimal VLIW packing.
+- **Fix**: Do NOT attempt to influence VLIW scheduling by reordering operations in Pallas kernel code. Focus on reducing total work, changing data dependencies, or altering block dimensions.
+- **Extends**: FP8 (same principle, confirmed for Pallas/Mosaic in addition to XLA)
+- **First seen**: 2026-03-30, chunk_gla optimization round 1
+
+### [FP19] Recomputing intermediates in split kernels can INCREASE register pressure
+- **Symptom**: Split backward kernel that recomputes dA in the dg sub-kernel produces 3.3M register spills (73% WORSE than 1.9M baseline), despite having fewer outputs per kernel.
+- **Root cause**: The dA matrix (BT x BT = 64x64 float32 = 16KB) plus all intermediate values needed for its recomputation (q, k, g, masking) overflow registers. The recomputation adds MORE live values than it saves by eliminating one output.
+- **Fix**: When splitting kernels, pass intermediate results between kernels via HBM rather than recomputing them. Only recompute if the intermediate is small AND its computation requires few additional live variables.
+- **First seen**: 2026-03-30, chunk_gla optimization round 1
+
+### [FP20] Kernel splitting reduces spills but adds launch overhead that can negate gains
+- **Symptom**: Split backward kernel achieves 81% spill reduction (1.9M -> 369K) and 37% VLIW reduction (8270 -> 5226), but latency INCREASES 8.3% (8691ms -> 9410ms, 0.825x vs 0.885x baseline).
+- **Root cause**: Two separate `pallas_call` invocations incur: (1) additional kernel launch overhead, (2) inter-kernel data transfer (dq passed from kernel A to kernel B via HBM), (3) 6 extra computation events (270 vs 264). The overhead exceeds the savings from simpler, spill-free kernels.
+- **Fix**: Prefer optimizing WITHIN the fused kernel (reduce intermediates, simplify control flow, smaller blocks) over splitting into multiple kernels. Splitting is only worthwhile if the per-kernel improvement vastly exceeds the launch+transfer overhead.
+- **First seen**: 2026-03-30, chunk_gla optimization round 1
+
+### [FP21] Dual-MXU scheduling not triggered by register pressure reduction alone
+- **Symptom**: Even with 369K spills (down from 1.9M, -81%), MXU dual_ratio remains 0.0 (mxu0=2910, mxu1=0). Compiler still places all MXU ops on a single unit.
+- **Root cause**: Dual-MXU scheduling depends on matmul dimensions and data dependencies, not just available registers. For chunk_gla's matmul dimensions (128x128 with K=128 on BT=64 chunks), the compiler may determine that a single MXU is sufficient or that data dependencies prevent parallel scheduling.
+- **Fix**: To enable dual-MXU, investigate: (1) matmul dimensions — ensure they're large enough to benefit from dual scheduling, (2) independent matmul pairs — the compiler needs two concurrent matmuls with no data dependency to use both MXUs, (3) operand layout — contiguous memory for both MXU ports.
+- **First seen**: 2026-03-30, chunk_gla optimization round 1
+
 ### SO8: Combined SO5+SO6+SO7 — zero backward quantization with unconstrained tiling (1.974x speedup)
 - **What**: Combine all backward quantization eliminations in a single variant: SO7 (bf16 grad + fp8 rhs for bwd_gmm) + SO5 (bf16 tgmm) + SO6 (unconstrained bf16 tgmm tiling 2048,256,128). Forward keeps FP8 quantization.
 - **Why**: Removing ALL backward quantization eliminates VPU/SFU work AND reduces register pressure (1,822 spills vs 2,777 with partial quantization). The register pressure reduction has a cascading benefit on VLIW schedule quality, producing 17,558 bundles (vs 18,172 baseline) and 896 MXU ops (vs 672 baseline). The combination compounds: SO6's tiling benefit (fewer grid iterations) + SO7's quantization elimination (cleaner schedule).
