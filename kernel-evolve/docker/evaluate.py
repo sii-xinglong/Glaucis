@@ -387,6 +387,13 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       )
       with open(best_file) as fh:
         llo_text = fh.read()
+      print(
+        f"LLO: {len(llo_text)} chars, "
+        f"';;' count={llo_text.count(';;')}, "
+        f"'.mxu' count={llo_text.count('.mxu')}, "
+        f"first 300: {llo_text[:300]!r}",
+        file=sys.stderr,
+      )
       # Count VLIW bundles (separated by `;;`)
       bundle_count = len(llo_text.split(";;")) - 1
       if bundle_count > 0:
