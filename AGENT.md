@@ -235,6 +235,12 @@
 - **Fix**: tgmm TM MUST be 1024 for bf16 tgmm. The range [512, 4096] has been fully explored: TM=512 (-4.5%), TM=1024 (optimal), TM=2048 (-2.7%), TM=4096 (FP13, bloat).
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
 
+### [FP27] tgmm TM=1024 improvement is code-path specific (L2 only)
+- **Symptom**: tgmm TM=1024 with f32 scales on L1 code path gives 2.241x — a massive regression from L1's 2.751x (TM=2048). The exact same tgmm TM=1024 on L2 gives 2.847x (+2.8% improvement).
+- **Root cause**: The XLA/Mosaic compiler makes different scheduling decisions based on the full kernel code, not just the tiling parameters. L1 and L2 have identical tiling but subtly different code structure (from their independent evolutionary paths). tgmm TM=1024 simplifies the VLIW schedule in a way that benefits L2's specific compilation but hurts L1's.
+- **Fix**: Do NOT assume tiling improvements are portable between code paths. Always test each optimization on each lineage independently. tgmm TM=1024 is L2-specific; L1 should stay at TM=2048.
+- **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 8
+
 ### [FP26] bwd_gmm TN<128 causes correctness failure
 - **Symptom**: bwd TN=64 (with _clamp_tiling min lowered to 64) returns INCORRECT status.
 - **Root cause**: tokamax's internal tiling logic assumes TN >= 128. Sub-128 N tiles break the matmul decomposition or scale application, producing incorrect results.

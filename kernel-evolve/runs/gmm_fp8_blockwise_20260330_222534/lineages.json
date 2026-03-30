@@ -1,5 +1,5 @@
 {
-  "round": 7,
+  "round": 8,
   "config": {
     "top_k": 2,
     "max_active_lineages": 4
@@ -12,7 +12,7 @@
       "best_kernel": "iteration_6/variants/L1_scale_bf16/kernel.py",
       "direction": "tiling_specialization",
       "history": ["iter-1-tiling_phase_specialization", "iter-2-L1_fwd_tk512", "iter-4-L1_adopt_l2_tiling", "iter-5-L1_fwd_tn256", "iter-6-L1_scale_bf16"],
-      "stagnant_rounds": 1
+      "stagnant_rounds": 2
     },
     {
       "id": "L2",
@@ -21,8 +21,10 @@
       "best_kernel": "iteration_6/variants/L2_tgmm_tm1024/kernel.py",
       "direction": "tiling_specialization",
       "history": ["iter-1-skip_lhs_t_fwd", "iter-2-L1_bwd_tm256", "iter-3-L2_bwd_tm256_tk512", "iter-4-L2_fwd_tk512", "iter-5-L2_fwd_tn256_tk512", "iter-6-L2_tgmm_tm1024"],
-      "stagnant_rounds": 1
+      "stagnant_rounds": 2
     }
   ],
-  "pruned": []
+  "pruned": [],
+  "terminated": true,
+  "termination_reason": "Both lineages stagnant for 2 consecutive rounds. Tiling space exhausted."
 }
