@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from kernel_evolve.config import EvolveConfig, SessionConfig, load_config
+from kernel_evolve.config import BatchConfig, EvolveConfig, SessionConfig, load_config
 
 
 @pytest.fixture
@@ -84,3 +84,55 @@ def test_config_no_evolution_or_llm_fields():
       tpu={"cluster": "c", "zone": "z"},
       evolution={"population_size": 25},
     )
+
+
+def test_config_with_batch():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    tpu={"cluster": "c", "zone": "z"},
+    batch={
+      "variants_per_round": 5,
+      "top_k": 2,
+      "max_active_lineages": 4,
+      "diversity_directions": ["tiling_strategy", "pipeline_depth"],
+    },
+  )
+  assert cfg.batch.variants_per_round == 5
+  assert cfg.batch.top_k == 2
+  assert cfg.batch.max_active_lineages == 4
+  assert cfg.batch.diversity_directions == ["tiling_strategy", "pipeline_depth"]
+
+
+def test_batch_config_defaults():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    tpu={"cluster": "c", "zone": "z"},
+  )
+  assert cfg.batch.variants_per_round == 1
+  assert cfg.batch.top_k == 1
+  assert cfg.batch.max_active_lineages == 4
+  assert cfg.batch.diversity_directions == []
+
+
+def test_batch_config_loaded_from_yaml(tmp_path):
+  yaml_content = """
+kernel:
+  name: "test"
+  template: "k.py"
+  reference: "r.py"
+shapes:
+  - { M: 64 }
+tpu:
+  cluster: "c"
+  zone: "z"
+batch:
+  variants_per_round: 3
+  top_k: 2
+"""
+  f = tmp_path / "config.yaml"
+  f.write_text(yaml_content)
+  cfg = load_config(f)
+  assert cfg.batch.variants_per_round == 3
+  assert cfg.batch.top_k == 2
