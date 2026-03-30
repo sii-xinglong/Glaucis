@@ -149,8 +149,12 @@ class KubeEvaluator(Evaluator):
   async def _download_artifacts(self, gcs_prefix: str, dest_dir: Path) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     _, stderr, rc = await self._run_cmd(
-      "gcloud", "storage", "cp", "-r",
-      f"{gcs_prefix}/*", str(dest_dir),
+      "gcloud",
+      "storage",
+      "cp",
+      "-r",
+      f"{gcs_prefix}/*",
+      str(dest_dir),
     )
     if rc != 0:
       print(f"Artifact download warning: {stderr}", file=sys.stderr)
@@ -238,9 +242,7 @@ class KubeEvaluator(Evaluator):
     except Exception as e:
       await self._cleanup(job_name)
       error_result = EvalResult.compile_error(f"Failed to submit batch job: {e}")
-      return BatchEvalResult(
-        results={v["variant_id"]: error_result for v in batch_request.variants}
-      )
+      return BatchEvalResult(results={v["variant_id"]: error_result for v in batch_request.variants})
 
     original_timeout = self._config.timeout
     self._config.timeout = 300 * len(batch_request.variants) + 300
@@ -250,9 +252,7 @@ class KubeEvaluator(Evaluator):
     if status not in ("Complete", "Failed"):
       await self._cleanup(job_name)
       error_result = EvalResult.compile_error("Batch job timed out")
-      return BatchEvalResult(
-        results={v["variant_id"]: error_result for v in batch_request.variants}
-      )
+      return BatchEvalResult(results={v["variant_id"]: error_result for v in batch_request.variants})
 
     logs = await self._read_logs(job_name)
 

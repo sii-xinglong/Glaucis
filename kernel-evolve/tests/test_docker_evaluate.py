@@ -12,9 +12,7 @@ from unittest.mock import patch
 
 
 def _load_evaluate_module():
-  module_path = (
-    Path(__file__).resolve().parents[1] / "docker" / "evaluate.py"
-  )
+  module_path = Path(__file__).resolve().parents[1] / "docker" / "evaluate.py"
   spec = importlib.util.spec_from_file_location("kernel_evolve_docker_evaluate", module_path)
   module = importlib.util.module_from_spec(spec)
   assert spec.loader is not None

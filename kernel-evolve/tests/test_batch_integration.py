@@ -50,11 +50,13 @@ def test_full_batch_data_flow():
   assert len(decoded["variants"]) == 3
 
   # Simulate batch results (as would come from Pod logs)
-  batch_result = BatchEvalResult(results={
-    "iter-1-tiling": EvalResult.success(latency_ms=0.8, speedup=1.5),
-    "iter-1-pipeline": EvalResult.compile_error("bad code"),
-    "iter-1-memory": EvalResult.success(latency_ms=1.0, speedup=1.2),
-  })
+  batch_result = BatchEvalResult(
+    results={
+      "iter-1-tiling": EvalResult.success(latency_ms=0.8, speedup=1.5),
+      "iter-1-pipeline": EvalResult.compile_error("bad code"),
+      "iter-1-memory": EvalResult.success(latency_ms=1.0, speedup=1.2),
+    }
+  )
 
   # Top-K selection
   ranked = batch_result.ranked()
@@ -63,7 +65,7 @@ def test_full_batch_data_flow():
   assert ranked[1][0] == "iter-1-memory"
 
   # Apply top_k from config
-  top_k = ranked[:cfg.batch.top_k]
+  top_k = ranked[: cfg.batch.top_k]
   assert len(top_k) == 2
   assert top_k[0][1].speedup == 1.5
 

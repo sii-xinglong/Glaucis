@@ -121,10 +121,15 @@ async def test_evaluate_no_result_in_logs(kube_config, eval_request):
 async def test_evaluate_downloads_artifacts(kube_config, eval_request):
   """evaluate() should attempt to download GCS artifacts when gcs_prefix is present."""
   evaluator = KubeEvaluator(kube_config)
-  result_json = json.dumps({
-    "status": "SUCCESS", "fitness": 2.5, "latency_ms": 0.5, "speedup": 2.5,
-    "metadata": {"artifacts_gcs_prefix": "gs://glaucis-profiles/test-job"},
-  })
+  result_json = json.dumps(
+    {
+      "status": "SUCCESS",
+      "fitness": 2.5,
+      "latency_ms": 0.5,
+      "speedup": 2.5,
+      "metadata": {"artifacts_gcs_prefix": "gs://glaucis-profiles/test-job"},
+    }
+  )
 
   evaluator._create_configmap = AsyncMock()
   evaluator._render_job_yaml = lambda *_: "rendered"
@@ -143,9 +148,14 @@ async def test_evaluate_downloads_artifacts(kube_config, eval_request):
 async def test_evaluate_skips_download_when_no_gcs_prefix(kube_config, eval_request):
   """evaluate() should not call _download_artifacts when no gcs_prefix."""
   evaluator = KubeEvaluator(kube_config)
-  result_json = json.dumps({
-    "status": "SUCCESS", "fitness": 2.5, "latency_ms": 0.5, "speedup": 2.5,
-  })
+  result_json = json.dumps(
+    {
+      "status": "SUCCESS",
+      "fitness": 2.5,
+      "latency_ms": 0.5,
+      "speedup": 2.5,
+    }
+  )
 
   evaluator._create_configmap = AsyncMock()
   evaluator._render_job_yaml = lambda *_: "rendered"
@@ -177,8 +187,24 @@ def batch_eval_request():
 @pytest.mark.asyncio
 async def test_evaluate_batch_success(kube_config, batch_eval_request):
   evaluator = KubeEvaluator(kube_config)
-  r1_json = json.dumps({"variant_id": "v1-tiling", "status": "SUCCESS", "fitness": 1.5, "latency_ms": 0.5, "speedup": 1.5})
-  r2_json = json.dumps({"variant_id": "v2-pipeline", "status": "SUCCESS", "fitness": 1.2, "latency_ms": 0.8, "speedup": 1.2})
+  r1_json = json.dumps(
+    {
+      "variant_id": "v1-tiling",
+      "status": "SUCCESS",
+      "fitness": 1.5,
+      "latency_ms": 0.5,
+      "speedup": 1.5,
+    }
+  )
+  r2_json = json.dumps(
+    {
+      "variant_id": "v2-pipeline",
+      "status": "SUCCESS",
+      "fitness": 1.2,
+      "latency_ms": 0.8,
+      "speedup": 1.2,
+    }
+  )
   logs = f"setup...\nEVAL_RESULT:{r1_json}\nEVAL_RESULT:{r2_json}\ndone"
 
   evaluator._create_configmap = AsyncMock()
@@ -199,8 +225,22 @@ async def test_evaluate_batch_success(kube_config, batch_eval_request):
 @pytest.mark.asyncio
 async def test_evaluate_batch_partial_failure(kube_config, batch_eval_request):
   evaluator = KubeEvaluator(kube_config)
-  r1_json = json.dumps({"variant_id": "v1-tiling", "status": "SUCCESS", "fitness": 1.5, "latency_ms": 0.5, "speedup": 1.5})
-  r2_json = json.dumps({"variant_id": "v2-pipeline", "status": "COMPILE_ERROR", "error": "bad code"})
+  r1_json = json.dumps(
+    {
+      "variant_id": "v1-tiling",
+      "status": "SUCCESS",
+      "fitness": 1.5,
+      "latency_ms": 0.5,
+      "speedup": 1.5,
+    }
+  )
+  r2_json = json.dumps(
+    {
+      "variant_id": "v2-pipeline",
+      "status": "COMPILE_ERROR",
+      "error": "bad code",
+    }
+  )
   logs = f"EVAL_RESULT:{r1_json}\nEVAL_RESULT:{r2_json}\n"
 
   evaluator._create_configmap = AsyncMock()
@@ -237,13 +277,25 @@ async def test_evaluate_batch_job_timeout(kube_config, batch_eval_request):
 @pytest.mark.asyncio
 async def test_evaluate_batch_downloads_artifacts(kube_config, batch_eval_request):
   evaluator = KubeEvaluator(kube_config)
-  r1_json = json.dumps({
-    "variant_id": "v1-tiling", "status": "SUCCESS", "fitness": 1.5, "latency_ms": 0.5, "speedup": 1.5,
-    "metadata": {"artifacts_gcs_prefix": "gs://glaucis-profiles/batch-job/v1-tiling"},
-  })
-  r2_json = json.dumps({
-    "variant_id": "v2-pipeline", "status": "SUCCESS", "fitness": 1.2, "latency_ms": 0.8, "speedup": 1.2,
-  })
+  r1_json = json.dumps(
+    {
+      "variant_id": "v1-tiling",
+      "status": "SUCCESS",
+      "fitness": 1.5,
+      "latency_ms": 0.5,
+      "speedup": 1.5,
+      "metadata": {"artifacts_gcs_prefix": "gs://glaucis-profiles/batch-job/v1-tiling"},
+    }
+  )
+  r2_json = json.dumps(
+    {
+      "variant_id": "v2-pipeline",
+      "status": "SUCCESS",
+      "fitness": 1.2,
+      "latency_ms": 0.8,
+      "speedup": 1.2,
+    }
+  )
   logs = f"EVAL_RESULT:{r1_json}\nEVAL_RESULT:{r2_json}\n"
 
   evaluator._create_configmap = AsyncMock()
@@ -254,7 +306,7 @@ async def test_evaluate_batch_downloads_artifacts(kube_config, batch_eval_reques
   evaluator._download_artifacts = AsyncMock()
   evaluator._cleanup = AsyncMock()
 
-  result = await evaluator.evaluate_batch(batch_eval_request)
+  await evaluator.evaluate_batch(batch_eval_request)
   evaluator._download_artifacts.assert_called_once()
 
 

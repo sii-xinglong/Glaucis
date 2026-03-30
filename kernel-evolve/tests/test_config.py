@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from kernel_evolve.config import BatchConfig, EvolveConfig, SessionConfig, load_config
+from kernel_evolve.config import EvolveConfig, SessionConfig, load_config
 
 
 @pytest.fixture
