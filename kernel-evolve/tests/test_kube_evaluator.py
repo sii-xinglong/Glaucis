@@ -256,3 +256,13 @@ async def test_evaluate_batch_downloads_artifacts(kube_config, batch_eval_reques
 
   result = await evaluator.evaluate_batch(batch_eval_request)
   evaluator._download_artifacts.assert_called_once()
+
+
+def test_render_batch_job_yaml_includes_deadline(kube_config, batch_eval_request, tmp_path):
+  template = tmp_path / "job.yaml"
+  template.write_text("deadline: ${ACTIVE_DEADLINE}\nname: ${JOB_NAME}\n")
+  kube_config.job_template = str(template)
+  evaluator = KubeEvaluator(kube_config)
+  rendered = evaluator._render_batch_job_yaml("my-batch", batch_eval_request)
+  # 2 variants * 300 + 300 = 900
+  assert "deadline: 900" in rendered
