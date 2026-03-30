@@ -1,0 +1,64 @@
+# XPlane exploration Job — one-off, run with:
+#   kubectl apply -f .github/ci/xplane-explore-job.yaml
+# Then watch logs:
+#   kubectl logs -f job/xplane-explore -c xplane-explore
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: xplane-explore
+  namespace: default
+  labels:
+    app: xplane-explore
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 7200
+  template:
+    metadata:
+      labels:
+        app: xplane-explore
+    spec:
+      serviceAccountName: kernel-eval
+      containers:
+      - name: xplane-explore
+        image: python:3.12
+        command:
+        - bash
+        - -c
+        - |
+          set -ex
+          pip install uv
+          uv pip install --system --prerelease=allow --no-cache \
+            jax jaxlib libtpu numpy xprof \
+            --extra-index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+          BRANCH="explore-xplane-tools"
+          git clone --depth=1 --branch="$BRANCH" \
+            "https://github.com/sii-xinglong/Glaucis.git" /workspace
+          cd /workspace
+          python kernel-evolve/scripts/explore_xplane.py 2>&1
+        env:
+        - name: JAX_PLATFORMS
+          value: "tpu,cpu"
+        - name: ENABLE_PJRT_COMPATIBILITY
+          value: "true"
+        - name: LIBTPU_INIT_ARGS
+          value: "--xla_enable_custom_call_region_trace=true --xla_xprof_register_llo_debug_info=true"
+        resources:
+          limits:
+            google.com/tpu: "4"
+          requests:
+            google.com/tpu: "4"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      nodeSelector:
+        cloud.google.com/gke-tpu-accelerator: tpu7x
+        cloud.google.com/gke-tpu-topology: 2x2x1
+      restartPolicy: Never
