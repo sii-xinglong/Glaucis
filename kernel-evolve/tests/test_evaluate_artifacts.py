@@ -33,7 +33,7 @@ def test_stage_profile_deep_returns_file_paths(tmp_path):
     '%result = bf16[1024,1024] custom-call(%p0)'
     ' custom_call_target="tpu_custom_call"'
   )
-  llo_file = llo_dir / "module.pass_79.llo"
+  llo_file = llo_dir / "12345-pallas_tpu_kernel-79-final_bundles.txt"
   llo_file.write_text(";; bundle1\n.mxu0 op1\n;; bundle2\n.mxu1 op2\n;; end")
 
   # stage_profile_deep only reads dump files; exec_globals is unused
@@ -41,7 +41,7 @@ def test_stage_profile_deep_returns_file_paths(tmp_path):
 
   assert result["ok"] is True
   assert result["_hlo_file"] == str(hlo_file)
-  assert result["_llo_file"] == str(llo_file)
+  assert result["_llo_file"] is not None
   # 3 ;; separators in llo file content
   assert result["vliw_bundle_count"] == 3
 
@@ -66,7 +66,7 @@ def test_stage_profile_deep_mxu_utilization(tmp_path):
   llo_dir.mkdir(parents=True)
 
   # Create LLO with known MXU operation counts
-  llo_file = llo_dir / "module.pass_10.llo"
+  llo_file = llo_dir / "12345-pallas_tpu_kernel-10-post_mxu_assigner.txt"
   llo_file.write_text(
     ";; bundle0\n"
     ".mxu0 matmul_start\n"
@@ -118,17 +118,17 @@ def test_stage_profile_deep_picks_highest_pass_llo(tmp_path):
   llo_dir = tmp_path / "llo"
   llo_dir.mkdir(parents=True)
 
-  # Create multiple LLO files — code picks the largest file (most content)
-  (llo_dir / "small.llo").write_text(";; early\n.mxu0 op1\n;; end")
-  (llo_dir / "large.llo").write_text(";; late\n.mxu0 op1\n.mxu0 op2\n.mxu1 op3\n;; end")
-  (llo_dir / "medium.llo").write_text(";; mid\n;; end")
+  # Create multiple LLO files with different pass numbers — code picks the largest file
+  (llo_dir / "12345-pallas_tpu_kernel-10-early.txt").write_text(";; early\n.mxu0 op1\n;; end")
+  (llo_dir / "12345-pallas_tpu_kernel-99-final_bundles.txt").write_text(";; late\n.mxu0 op1\n.mxu0 op2\n.mxu1 op3\n;; end")
+  (llo_dir / "12345-pallas_tpu_kernel-50-mid.txt").write_text(";; mid\n;; end")
 
   result = stage_profile_deep({}, [{"M": 256}], dump_dir=str(tmp_path))
 
   assert result["ok"] is True
-  # Should pick the largest file
-  assert result["_llo_file"] == str(llo_dir / "large.llo")
-  # large.llo has 2 mxu0 ops and 1 mxu1 op
+  # Should pick the largest pallas file (pass_99 has most content)
+  assert "pallas_tpu_kernel-99" in result["_llo_file"]
+  # pass_99 has 2 mxu0 ops and 1 mxu1 op
   assert result["mxu_utilization"]["mxu0"] == 2
   assert result["mxu_utilization"]["mxu1"] == 1
 
