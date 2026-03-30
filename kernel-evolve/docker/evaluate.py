@@ -552,6 +552,7 @@ def main():
   parser.add_argument("--eval-payload", required=True)
   args = parser.parse_args()
   request = decode_request(args.eval_payload)
+  job_name = request.get("variant_id", "unknown")
 
   if not _has_tpu():
     print("ERROR: No TPU detected. This evaluator requires a TPU device.", file=sys.stderr)
@@ -611,19 +612,41 @@ def main():
     actual_fps = deep_profile["flops"] / (perf_result["latency_ms"] / 1000.0)
     deep_profile["compute_efficiency_pct"] = (actual_fps / 275e12) * 100.0
 
+  # ── Upload profile artifacts to GCS (non-fatal) ──
+  artifacts = {}
+  if profile_result.get("ok"):
+    trace_path = profile_result.get("_trace_events_path")
+    if trace_path:
+      artifacts["trace_events.json"] = trace_path
+  if deep_profile.get("ok"):
+    hlo_path = deep_profile.get("_hlo_file")
+    llo_path = deep_profile.get("_llo_file")
+    if hlo_path:
+      artifacts["hlo_post_opt.txt"] = hlo_path
+    if llo_path:
+      artifacts["llo_final.txt"] = llo_path
+
+  gcs_result = upload_to_gcs(job_name, artifacts) if artifacts else {"ok": False, "uploaded": [], "gcs_prefix": ""}
+  if gcs_result["ok"]:
+    print(f"Uploaded artifacts: {gcs_result['uploaded']} to {gcs_result['gcs_prefix']}", file=sys.stderr)
+
+  # Strip internal fields from deep_profile before including in result
+  clean_deep_profile = {k: v for k, v in deep_profile.items() if not k.startswith("_")}
+
   result = {
     "status": "SUCCESS",
     "fitness": speedup,
     "latency_ms": perf_result["latency_ms"],
     "speedup": speedup,
-    "flops": deep_profile.get("flops", 0.0) or 0.0,
+    "flops": clean_deep_profile.get("flops", 0.0) or 0.0,
     "compute_ratio": compute_ratio,
     "memory_transfer_ratio": memory_transfer_ratio,
     "metadata": {
       "reference_latency_ms": ref_latency,
       "reference_perf_ok": ref_perf.get("ok", False),
       "profile_diagnostics": profile_diag,
-      "profile": deep_profile,
+      "profile": clean_deep_profile,
+      **({"artifacts_gcs_prefix": gcs_result["gcs_prefix"]} if gcs_result.get("ok") else {}),
     },
   }
   print(f"EVAL_RESULT:{json.dumps(result)}")
