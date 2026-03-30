@@ -13,7 +13,7 @@ metadata:
     variant-id: "${VARIANT_ID}"
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 600
+  activeDeadlineSeconds: 1800
   ttlSecondsAfterFinished: 3600
   template:
     metadata:
