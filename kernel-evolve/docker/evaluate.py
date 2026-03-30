@@ -779,10 +779,9 @@ if __name__ == "__main__":
   _request = decode_request(_args.eval_payload)
 
   if _request.get("batch"):
-    # Batch mode: check TPU once, then dispatch subprocesses
-    if not _has_tpu():
-      print("ERROR: No TPU detected.", file=sys.stderr)
-      sys.exit(1)
+    # Batch mode: skip TPU check in parent — each subprocess checks
+    # independently. Calling _has_tpu() here locks libtpu for PID 1,
+    # preventing subprocesses from accessing the TPU.
     from kernel_evolve.docker_evaluate_helpers import batch_dispatch
 
     result_lines = batch_dispatch(
