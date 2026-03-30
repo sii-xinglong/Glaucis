@@ -96,26 +96,26 @@
 - **Fix**: For fwd/bwd_gmm, prefer square-ish tile aspect ratios. (1024, 256) is optimal for the current shapes (M=8192, K=2048, N=512).
 - **First seen**: 2026-03-30, gmm_fp8_blockwise iteration 3
 
-### [FP8] Backward operation reordering (tgmm-first) does not improve performance
-- **Symptom**: Reordering backward to execute tgmm before bwd_gmm (with all quantization front-loaded) regresses from 1.621x to 1.529x (-5.7%)
-- **Root cause**: XLA schedules operations based on data dependencies, not Python source order. Changing the order of independent operations in Python doesn't meaningfully affect the compiled VLIW schedule. The regression likely stems from different register allocation choices caused by the altered operation order, resulting in slightly worse instruction packing.
+### [FP8] Backward operation reordering does not improve performance
+- **Symptom**: Reordering backward to execute tgmm before bwd_gmm regresses from 1.621x to 1.529x (-5.7%). Placing lhs_t quantization before dlhs_dout quantization regresses further to 1.501x (-7.4%).
+- **Root cause**: XLA schedules operations based on data dependencies, not Python source order. Changing the order of independent operations in Python doesn't meaningfully affect the compiled VLIW schedule. The regression stems from different register allocation choices caused by the altered operation order. Placing lhs_t quantization early keeps the large transposed tensor alive longer, increasing register pressure during bwd_gmm.
 - **Fix**: Don't attempt to influence XLA scheduling by reordering independent operations in Python. Focus on reducing total work (fewer ops) rather than operation ordering.
-- **Evidence**: Both orderings produce identical VLIW bundle count (18,172) and MXU dual_ratio (1.0), confirming XLA normalizes the schedule. The 0.8ms latency difference comes from subtle register allocation effects.
+- **Evidence**: All orderings produce identical VLIW bundle count (18,172) and MXU dual_ratio (1.0), confirming XLA normalizes the schedule. Latency differences (0.8-1.3ms) come from subtle register allocation effects.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 1
+- **Additional evidence**: 2026-03-30, batch round 3 (overlap_bwd_interleave: 1.501x regression)
 
-### SO6: Unconstrained bf16 tgmm tiling (1.861x speedup)
-- **What**: With bf16 tgmm (SO5), use tiling (2048, 256, 128) for tgmm phase — 2x larger M and 2x larger N than the previous fp8-constrained maximum.
-- **Why**: FP2 (N≤128) and FP7 (M≤1024) constraints were caused by fp8 scale tensor shape mismatches in tokamax. With bf16 inputs, there are no scale tensors, so these constraints don't apply. Larger tiles reduce the tgmm grid from 32 tiles to 8 tiles.
-- **Impact**: 1.861x speedup (5.55ms vs 10.33ms). +7.4% over SO5.
-- **Config**: tiling = (1024, 256, 128, 1024, 256, 128, 2048, 256, 128) with bf16 tgmm
-- **Profile**: VLIW bundles unchanged (18,172), MXU dual_ratio=1.0, compute_efficiency=12.87%
-- **Rule**: When using bf16 inputs for tokamax gmm/tgmm, tiling constraints from fp8 scale handling (FP2, FP7) do not apply. Explore the full tiling space.
-- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 2
+### [FP9] bwd_gmm M=2048 causes VLIW bloat regardless of input precision
+- **Symptom**: bwd_gmm with M=2048 tiling (bf16 lhs + fp8 rhs mixed precision) produces 25,048 VLIW bundles (+42% over baseline 17,558), 3,757 register spills, and regresses from 1.974x to 1.818x.
+- **Root cause**: The VMEM constraint from FP3 is independent of input precision. bwd_gmm M=2048 with N=256 creates sub-tiles that serialize within each tile, adding loop overhead and register pressure. This applies whether inputs are fp8, bf16, or mixed.
+- **Fix**: bwd_gmm M tiling MUST stay at 1024 regardless of precision. The constraint is VMEM capacity and sub-tile serialization, not fp8 scale handling.
+- **Extends**: FP3 (VMEM regression), FP6 (tile aspect ratio)
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 3
 
-### SO7: Zero backward quantization — mixed bf16/fp8 bwd_gmm (1.833x speedup)
-- **What**: Skip dlhs_dout quantization in backward. Pass bf16 grad directly to `tokamax_backend.gmm` with fp8 rhs (mixed precision inputs). Combined with bf16 tgmm (SO5), this eliminates ALL quantization from backward.
-- **Why**: tokamax gmm accepts mixed bf16/fp8 inputs. Removing the dlhs_dout quantize call eliminates ~3,200 VLIW bundles of VPU code (18,172 → 14,937, -18%). MXU ops increase from 672 to 1,056 (+57%), indicating the kernel is more matmul-dominated.
-- **Impact**: 1.833x speedup (5.79ms vs 10.61ms). +5.8% over SO5.
-- **Profile**: VLIW 14,937, MXU 1,056, DMA 28. Fundamentally different compilation profile.
-- **Rule**: tokamax accepts mixed precision (bf16 lhs + fp8 rhs) for gmm. Removing quantization simplifies the VLIW schedule and increases MXU utilization.
-- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 2
+### SO8: Combined SO5+SO6+SO7 — zero backward quantization with unconstrained tiling (1.974x speedup)
+- **What**: Combine all backward quantization eliminations in a single variant: SO7 (bf16 grad + fp8 rhs for bwd_gmm) + SO5 (bf16 tgmm) + SO6 (unconstrained bf16 tgmm tiling 2048,256,128). Forward keeps FP8 quantization.
+- **Why**: Removing ALL backward quantization eliminates VPU/SFU work AND reduces register pressure (1,822 spills vs 2,777 with partial quantization). The register pressure reduction has a cascading benefit on VLIW schedule quality, producing 17,558 bundles (vs 18,172 baseline) and 896 MXU ops (vs 672 baseline). The combination compounds: SO6's tiling benefit (fewer grid iterations) + SO7's quantization elimination (cleaner schedule).
+- **Impact**: 1.974x speedup (5.29ms vs 10.44ms). +6.1% over SO6 (1.861x). +7.7% over SO7 (1.833x). New overall best.
+- **Config**: tiling = (1024, 256, 128, 1024, 256, 128, 2048, 256, 128), zero backward quantization, bf16 tgmm
+- **Profile**: VLIW 17,558, MXU 896, DMA 21, dual_ratio=1.0, compute_efficiency=13.51%, arithmetic_intensity=12,288
+- **Rule**: When optimizations reduce both compute AND register pressure, they compound. Always try combining individually-proven optimizations — the interaction effects can exceed the sum of parts.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 3
