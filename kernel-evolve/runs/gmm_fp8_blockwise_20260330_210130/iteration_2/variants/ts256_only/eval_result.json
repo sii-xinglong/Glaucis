@@ -1,0 +1,6 @@
+{
+  "status": "INCORRECT",
+  "variant_id": "ts256_only",
+  "error": "Correctness failed for shape {'M': 8192, 'K': 2048, 'N': 512, 'G': 32}: max_diff=94575.125",
+  "max_diff": 94575.125
+}

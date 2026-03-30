@@ -1,0 +1,5 @@
+{
+  "variant_id": "tiling_512_1024_512_ts256",
+  "status": "COMPILE_ERROR",
+  "error": "81592   51069 coredump_hook.cc:415] RAW: Cannot send fingerprint to Coroner: [NOT_FOUND] stat failed on crash reporting socket /var/google/services/logmanagerd/remote_coredump.socket (Is the listener running?): No such file or directory\nE0330 14:04:40.881593   51069 coredump_hook.cc:467] RAW: Dumping core locally.\nF0330 14:04:40.704002   51069 array.h:488] Check failed: limits[i] <= dim(i) (8 vs. 1) \nE0330 14:04:45.251567   51069 process_state.cc:772] RAW: Raising signal 6 with default behavior\n"
+}

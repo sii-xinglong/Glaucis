@@ -20,5 +20,17 @@
 - **Fix**: Change one quantization parameter at a time. Test tile_size=256 alone first. Test channelwise-only alone. Never combine multiple quantization simplifications in a single variant.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise optimization
 
+### [F004] GMM tiling must respect per-group dimensions
+- **Symptom**: Tiling (512,1024,512) and (256,512,256) both crash with `Check failed: limits[i] <= dim(i)` core dump in Mosaic compiler array.h
+- **Root cause**: GMM is *grouped* — tiling (TM, TK, TN) operates within each group, not the full matrix. With G=32 groups, M=8192: per-group M=256. Tiling TM=512 > 256 causes the crash. Similarly, the Down projection has K=512, so TK=1024 > 512 also crashes. The valid tiling range per dimension is bounded by the **minimum per-group dimension across all shapes**.
+- **Fix**: For gmm_fp8_blockwise with shapes [8192,2048]@[32,2048,512] and [8192,512]@[32,512,2048]: TM ≤ 256 (M/G), TK ≤ 512 (min K), TN ≤ 512 (min N). Maximum valid uniform tiling: (256, 512, 512). Must also remove the `min(t, tile_size)` clamping to allow tiling > 128.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise optimization (Round 2: 4/5 variants crashed)
+
+### [F005] Quantization tile_size=256 completely breaks FP8 correctness
+- **Symptom**: `ts256_only` variant with tile_size=256 (isolated change) produced max_diff=94,575 — catastrophically wrong output
+- **Root cause**: qwix FP8 blockwise quantization with tile_size=256 produces wildly different numerical results than tile_size=128. The scaling factors computed over 256-element blocks are too coarse for the FP8 dynamic range, causing massive overflow/underflow.
+- **Fix**: tile_size MUST stay at 128 for this kernel. Do NOT increase quantization tile_size. The optimization surface for this kernel is limited to tokamax tiling parameters and computation structure.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise optimization (Round 2)
+
 ## Successful Optimizations
 
