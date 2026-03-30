@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import string
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,6 +136,24 @@ class KubeEvaluator(Evaluator):
     )
     return stdout
 
+  async def _run_cmd(self, *args: str) -> tuple[str, str, int]:
+    proc = await asyncio.create_subprocess_exec(
+      *args,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode(), stderr.decode(), proc.returncode
+
+  async def _download_artifacts(self, gcs_prefix: str, dest_dir: Path) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    _, stderr, rc = await self._run_cmd(
+      "gcloud", "storage", "cp", "-r",
+      f"{gcs_prefix}/*", str(dest_dir),
+    )
+    if rc != 0:
+      print(f"Artifact download warning: {stderr}", file=sys.stderr)
+
   async def _cleanup(self, job_name: str) -> None:
     cm_name = f"{job_name}-payload"
     await self._run_kubectl(
@@ -173,12 +192,24 @@ class KubeEvaluator(Evaluator):
       return EvalResult.compile_error(f"Job timed out after {self._config.timeout}s")
 
     logs = await self._read_logs(job_name)
-    await self._cleanup(job_name)
 
+    eval_result = None
     for line in logs.split("\n"):
       if "EVAL_RESULT:" in line:
         json_str = line.split("EVAL_RESULT:", 1)[1].strip()
-        return EvalResult.from_dict(json.loads(json_str))
+        eval_result = EvalResult.from_dict(json.loads(json_str))
+        break
+
+    # Download GCS artifacts if available
+    if eval_result and eval_result.metadata.get("artifacts_gcs_prefix"):
+      gcs_prefix = eval_result.metadata["artifacts_gcs_prefix"]
+      artifacts_dir = Path(f"artifacts/{job_name}")
+      await self._download_artifacts(gcs_prefix, artifacts_dir)
+
+    await self._cleanup(job_name)
+
+    if eval_result:
+      return eval_result
 
     error_snippet = logs[-500:] if len(logs) > 500 else logs
     return EvalResult.compile_error(f"No result in job logs. Tail: {error_snippet}")
