@@ -1,6 +1,6 @@
 ---
 name: start
-description: Use when starting a Pallas kernel optimization session on TPU v7x — reads config, creates tracking Issue, runs batch think-submit-analyze-reflect-compact loop with lineage tracking
+description: Use when starting a Pallas kernel optimization session on TPU v7x — runs baseline profiling, reads config, creates tracking Issue, runs profile-informed think-submit-analyze-reflect-compact loop with lineage tracking
 ---
 
 # Pallas Kernel Batch Optimization
@@ -139,7 +139,7 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
 
 7. Write the profile brief using this template:
 
-   ```markdown
+   ````markdown
    ## Profile Brief for Round {N}
 
    ### Source
@@ -202,7 +202,7 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
 
    ### What NOT to try (profile evidence)
    - **{Direction}**: {Why profile shows this won't help, citing metrics}
-   ```
+   ````
 
    For Round 2+, add a delta section at the top of the brief:
 
