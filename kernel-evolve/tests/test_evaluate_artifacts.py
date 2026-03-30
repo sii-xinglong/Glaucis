@@ -36,33 +36,21 @@ def test_stage_profile_deep_returns_file_paths(tmp_path):
   llo_file = llo_dir / "module.pass_79.llo"
   llo_file.write_text(";; bundle1\n.mxu0 op1\n;; bundle2\n.mxu1 op2\n;; end")
 
-  # Mock kernel_fn that does nothing (dump files already exist)
-  mock_out = MagicMock()
-  mock_out.block_until_ready = MagicMock()
-  mock_kernel_fn = MagicMock(return_value=mock_out)
-  exec_globals = {"optimized_compute": mock_kernel_fn}
-
-  result = stage_profile_deep(exec_globals, [{"M": 1024}], dump_dir=str(tmp_path))
+  # stage_profile_deep only reads dump files; exec_globals is unused
+  result = stage_profile_deep({}, [{"M": 1024}], dump_dir=str(tmp_path))
 
   assert result["ok"] is True
   assert result["_hlo_file"] == str(hlo_file)
   assert result["_llo_file"] == str(llo_file)
   # 3 ;; separators in llo file content
   assert result["vliw_bundle_count"] == 3
-  # Verify kernel was actually called
-  mock_kernel_fn.assert_called_once_with(M=1024)
 
 
 def test_stage_profile_deep_none_when_no_dumps(tmp_path):
   """stage_profile_deep should return None for _hlo_file/_llo_file when no dumps exist."""
   from evaluate import stage_profile_deep
 
-  mock_out = MagicMock()
-  mock_out.block_until_ready = MagicMock()
-  mock_kernel_fn = MagicMock(return_value=mock_out)
-  exec_globals = {"optimized_compute": mock_kernel_fn}
-
-  result = stage_profile_deep(exec_globals, [{"M": 1024}], dump_dir=str(tmp_path))
+  result = stage_profile_deep({}, [{"M": 1024}], dump_dir=str(tmp_path))
 
   assert result["ok"] is True
   assert result["_hlo_file"] is None
@@ -88,12 +76,7 @@ def test_stage_profile_deep_mxu_utilization(tmp_path):
     ";; end\n"
   )
 
-  mock_out = MagicMock()
-  mock_out.block_until_ready = MagicMock()
-  mock_kernel_fn = MagicMock(return_value=mock_out)
-  exec_globals = {"optimized_compute": mock_kernel_fn}
-
-  result = stage_profile_deep(exec_globals, [{"M": 512}], dump_dir=str(tmp_path))
+  result = stage_profile_deep({}, [{"M": 512}], dump_dir=str(tmp_path))
 
   assert result["ok"] is True
   assert result["mxu_utilization"] is not None
@@ -122,40 +105,30 @@ def test_stage_profile_deep_hlo_bandwidth_parsing(tmp_path):
     ' custom_call_target="tpu_custom_call"\n'
   )
 
-  mock_out = MagicMock()
-  mock_out.block_until_ready = MagicMock()
-  mock_kernel_fn = MagicMock(return_value=mock_out)
-  exec_globals = {"optimized_compute": mock_kernel_fn}
-
-  result = stage_profile_deep(exec_globals, [{"M": 1024}], dump_dir=str(tmp_path))
+  result = stage_profile_deep({}, [{"M": 1024}], dump_dir=str(tmp_path))
 
   assert result["ok"] is True
   assert result["hbm_bandwidth_bytes"] == 8 * 2048 * 128 * 2 * 2  # output + input, bf16=2 bytes
 
 
 def test_stage_profile_deep_picks_highest_pass_llo(tmp_path):
-  """stage_profile_deep should select the LLO file with the highest pass number."""
+  """stage_profile_deep should select the largest LLO file (most complete body)."""
   from evaluate import stage_profile_deep
 
   llo_dir = tmp_path / "llo"
   llo_dir.mkdir(parents=True)
 
-  # Create multiple LLO files with different pass numbers
-  (llo_dir / "module.pass_10.llo").write_text(";; early\n.mxu0 op1\n;; end")
-  (llo_dir / "module.pass_99.llo").write_text(";; late\n.mxu0 op1\n.mxu0 op2\n.mxu1 op3\n;; end")
-  (llo_dir / "module.pass_50.llo").write_text(";; mid\n;; end")
+  # Create multiple LLO files — code picks the largest file (most content)
+  (llo_dir / "small.llo").write_text(";; early\n.mxu0 op1\n;; end")
+  (llo_dir / "large.llo").write_text(";; late\n.mxu0 op1\n.mxu0 op2\n.mxu1 op3\n;; end")
+  (llo_dir / "medium.llo").write_text(";; mid\n;; end")
 
-  mock_out = MagicMock()
-  mock_out.block_until_ready = MagicMock()
-  mock_kernel_fn = MagicMock(return_value=mock_out)
-  exec_globals = {"optimized_compute": mock_kernel_fn}
-
-  result = stage_profile_deep(exec_globals, [{"M": 256}], dump_dir=str(tmp_path))
+  result = stage_profile_deep({}, [{"M": 256}], dump_dir=str(tmp_path))
 
   assert result["ok"] is True
-  # Should pick pass_99 (highest pass number)
-  assert result["_llo_file"] == str(llo_dir / "module.pass_99.llo")
-  # pass_99 has 2 mxu0 ops and 1 mxu1 op
+  # Should pick the largest file
+  assert result["_llo_file"] == str(llo_dir / "large.llo")
+  # large.llo has 2 mxu0 ops and 1 mxu1 op
   assert result["mxu_utilization"]["mxu0"] == 2
   assert result["mxu_utilization"]["mxu1"] == 1
 
@@ -185,14 +158,21 @@ def test_stage_profile_deep_restores_env_vars(tmp_path):
     os.environ.pop("LIBTPU_INIT_ARGS", None)
 
 
-def test_stage_profile_deep_no_kernel_fn(tmp_path):
-  """stage_profile_deep should return ok=False when no kernel function is found."""
+def test_stage_profile_deep_no_dumps_returns_ok_true(tmp_path):
+  """stage_profile_deep returns ok=True with null metrics when no dumps exist.
+
+  The function only reads dump files; it does not use exec_globals.
+  Missing dumps are not an error — they just mean no IR-level metrics are available.
+  """
   from evaluate import stage_profile_deep
 
   result = stage_profile_deep({}, [{"M": 1024}], dump_dir=str(tmp_path))
 
-  assert result["ok"] is False
-  assert "No kernel_fn" in result["error"]
+  assert result["ok"] is True
+  assert result["_hlo_file"] is None
+  assert result["_llo_file"] is None
+  assert result["vliw_bundle_count"] is None
+  assert result["mxu_utilization"] is None
 
 
 def test_trace_events_json_roundtrip(tmp_path):
