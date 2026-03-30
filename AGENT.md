@@ -111,6 +111,12 @@
 - **Extends**: FP3 (VMEM regression), FP6 (tile aspect ratio)
 - **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 3
 
+### [FP10] Forward GMM rejects mixed bf16/fp8 precision — catastrophic correctness failure
+- **Symptom**: Passing bf16 lhs + fp8 rhs to `tokamax_backend.gmm()` in forward (transpose_rhs=False) produces max_diff=120,649 — catastrophically wrong output. Both `fwd_mixed_precision` and `reduce_fwd_quant` variants hit this.
+- **Root cause**: tokamax's forward gmm requires matching precision for both operands when using FP8 blockwise quantization. The internal scale application path differs between forward (transpose_rhs=False) and backward (transpose_rhs=True). SO7 proved mixed precision works for backward gmm with transpose_rhs=True, but this does NOT extend to forward.
+- **Fix**: Forward lhs MUST be quantized to fp8 when rhs is fp8. Mixed precision (bf16 lhs + fp8 rhs) is ONLY valid for backward gmm (transpose_rhs=True). Do NOT skip forward lhs quantization.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise session 2, round 1
+
 ### SO8: Combined SO5+SO6+SO7 — zero backward quantization with unconstrained tiling (1.974x speedup)
 - **What**: Combine all backward quantization eliminations in a single variant: SO7 (bf16 grad + fp8 rhs for bwd_gmm) + SO5 (bf16 tgmm) + SO6 (unconstrained bf16 tgmm tiling 2048,256,128). Forward keeps FP8 quantization.
 - **Why**: Removing ALL backward quantization eliminates VPU/SFU work AND reduces register pressure (1,822 spills vs 2,777 with partial quantization). The register pressure reduction has a cascading benefit on VLIW schedule quality, producing 17,558 bundles (vs 18,172 baseline) and 896 MXU ops (vs 672 baseline). The combination compounds: SO6's tiling benefit (fewer grid iterations) + SO7's quantization elimination (cleaner schedule).
@@ -119,3 +125,13 @@
 - **Profile**: VLIW 17,558, MXU 896, DMA 21, dual_ratio=1.0, compute_efficiency=13.51%, arithmetic_intensity=12,288
 - **Rule**: When optimizations reduce both compute AND register pressure, they compound. Always try combining individually-proven optimizations — the interaction effects can exceed the sum of parts.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise batch round 3
+
+### SO9: Phase-specialized tiling — TM=256 forward + TK=512 tgmm (2.294x speedup)
+- **What**: Use different tiling per compute phase instead of uniform tiling. Forward gmm: (256, 256, 128), bwd_gmm: (1024, 256, 128), tgmm: (2048, 512, 128). Combined with SO8's zero backward quantization.
+- **Why**: TM=256 for forward matches per-group M exactly (M=8192 / G=32 = 256), creating perfectly-sized tiles with no wasted computation. This produces 2x more MXU ops (1,792 vs 896) because the compiler generates more matmul tiles that each do a full 256x256 matmul. TK=512 for tgmm halves K-loop iterations (bf16 tgmm has no fp8 constraints on K).
+- **Impact**: 2.294x speedup (4.692ms vs 10.762ms). +16.2% over SO8 (1.974x). New overall best.
+- **Config**: tiling = (256, 256, 128, 1024, 256, 128, 2048, 512, 128), zero backward quantization, bf16 tgmm
+- **Profile**: VLIW 23,462, MXU 1,792, DMA 21, dual_ratio=1.0, compute_efficiency=15.24%, spills=156
+- **Key insight**: More VLIW bundles (23,462 vs 17,558) but FASTER because MXU throughput doubled. VLIW bundle count alone is not a reliable quality metric — MXU ops per bundle matters more.
+- **Rule**: For grouped matmul, match TM to per-group M dimension for optimal tile utilization. More tiles with exact sizing beats fewer tiles with partial utilization.
+- **First seen**: 2026-03-30, gmm_fp8_blockwise session 2, round 1
