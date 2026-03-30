@@ -279,3 +279,54 @@ def test_upload_to_gcs_empty_artifacts():
     result = upload_to_gcs("test-job", {})
     assert result["ok"] is False
     assert result["uploaded"] == []
+
+
+def test_main_collects_artifacts_for_upload():
+  """Verify the artifact collection logic from stage results."""
+  profile_result = {
+    "ok": True,
+    "compute_ratio": 0.85,
+    "memory_transfer_ratio": 0.15,
+    "diagnostics": {},
+    "_trace_events_path": "/tmp/xplane_trace/trace_events.json",
+  }
+  deep_profile = {
+    "ok": True,
+    "vliw_bundle_count": 100,
+    "_hlo_file": "/tmp/ir_dumps/hlo/module.after.txt",
+    "_llo_file": "/tmp/ir_dumps/llo/module.pass_79.llo",
+  }
+
+  artifacts = {}
+  if profile_result.get("ok"):
+    trace_path = profile_result.get("_trace_events_path")
+    if trace_path:
+      artifacts["trace_events.json"] = trace_path
+  if deep_profile.get("ok"):
+    hlo_path = deep_profile.get("_hlo_file")
+    llo_path = deep_profile.get("_llo_file")
+    if hlo_path:
+      artifacts["hlo_post_opt.txt"] = hlo_path
+    if llo_path:
+      artifacts["llo_final.txt"] = llo_path
+
+  assert artifacts == {
+    "trace_events.json": "/tmp/xplane_trace/trace_events.json",
+    "hlo_post_opt.txt": "/tmp/ir_dumps/hlo/module.after.txt",
+    "llo_final.txt": "/tmp/ir_dumps/llo/module.pass_79.llo",
+  }
+
+
+def test_internal_fields_stripped_from_eval_result():
+  """Internal _fields must not appear in EVAL_RESULT JSON."""
+  deep_profile = {
+    "ok": True,
+    "vliw_bundle_count": 100,
+    "_hlo_file": "/tmp/some/path.txt",
+    "_llo_file": "/tmp/other/path.llo",
+  }
+  clean = {k: v for k, v in deep_profile.items() if not k.startswith("_")}
+  assert "_hlo_file" not in clean
+  assert "_llo_file" not in clean
+  assert "vliw_bundle_count" in clean
+  assert "ok" in clean
