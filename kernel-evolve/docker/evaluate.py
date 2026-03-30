@@ -327,6 +327,22 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       if M and K and N:
         flops = 6.0 * M * K * N * G
 
+    # ── Diagnostics: list all files in dump dirs ───────────────────
+    for label, d in [("hlo", hlo_dir), ("llo", llo_dir),
+                     ("mosaic", dump_path / "mosaic")]:
+      all_files = []
+      d_path = Path(d)
+      if d_path.exists():
+        for root, _dirs, files in os.walk(d_path):
+          for f in files:
+            rel = os.path.relpath(os.path.join(root, f), d_path)
+            all_files.append(rel)
+      print(
+        f"Dump dir [{label}]: {len(all_files)} files"
+        + (f" — {all_files[:20]}" if all_files else ""),
+        file=sys.stderr,
+      )
+
     # ── Parse LLO dumps ──────────────────────────────────────────────
     vliw_bundle_count = None
     mxu_utilization = None
