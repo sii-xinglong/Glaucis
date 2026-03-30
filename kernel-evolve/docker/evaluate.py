@@ -564,9 +564,11 @@ def main():
     )
 
   # Compute efficiency from deep profile FLOPs and measured latency
+  # TPU v7x per-chip peak: BF16 275 TFLOPS, FP8/INT8 550 TFLOPS (2x)
+  peak_flops = float(os.environ.get("PEAK_FLOPS", 550e12))  # default FP8
   if deep_profile.get("flops") and perf_result["latency_ms"] > 0:
     actual_fps = deep_profile["flops"] / (perf_result["latency_ms"] / 1000.0)
-    deep_profile["compute_efficiency_pct"] = (actual_fps / 275e12) * 100.0
+    deep_profile["compute_efficiency_pct"] = (actual_fps / peak_flops) * 100.0
 
   result = {
     "status": "SUCCESS",
