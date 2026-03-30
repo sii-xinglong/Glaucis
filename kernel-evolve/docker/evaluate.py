@@ -344,29 +344,47 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       )
 
     # ── Parse LLO dumps ──────────────────────────────────────────────
+    # LLO files are named: {hash}-{op_name}-{pass_num}-{pass_name}.txt
+    # We want the final scheduled pass (highest pass number) for the
+    # custom-call op (Pallas kernel), which contains VLIW bundles and MXU ops.
     vliw_bundle_count = None
     mxu_utilization = None
     mxu0_count = 0
     mxu1_count = 0
 
-    llo_files = glob.glob(str(llo_dir / "**" / "*.llo"), recursive=True)
-    llo_files += glob.glob(str(llo_dir / "**" / "*.llo.txt"), recursive=True)
+    llo_files = glob.glob(str(llo_dir / "**" / "*.txt"), recursive=True)
 
-    # Find highest pass number file
+    # Parse filename pattern: {hash}-{op_name}-{pass_num}-{pass_name}.txt
+    file_re = re.compile(r"^\d+-(.+?)-(\d+)-(.+)\.txt$")
     best_pass = -1
     best_file = None
-    pass_re = re.compile(r"pass[_.]?(\d+)")
     for f in llo_files:
-      m = pass_re.search(os.path.basename(f))
-      if m:
-        pnum = int(m.group(1))
-        if pnum > best_pass:
-          best_pass = pnum
+      m = file_re.match(os.path.basename(f))
+      if not m:
+        continue
+      op_name = m.group(1)
+      pass_num = int(m.group(2))
+      # Prefer custom-call ops (Pallas kernels) with highest pass number
+      if "custom-call" in op_name or "custom_call" in op_name:
+        if pass_num > best_pass:
+          best_pass = pass_num
           best_file = f
-      elif best_file is None:
-        best_file = f
+
+    # Fallback: if no custom-call found, try any file with highest pass
+    if best_file is None:
+      for f in llo_files:
+        m = file_re.match(os.path.basename(f))
+        if m:
+          pass_num = int(m.group(2))
+          if pass_num > best_pass:
+            best_pass = pass_num
+            best_file = f
 
     if best_file is not None:
+      print(
+        f"LLO: selected {os.path.basename(best_file)} (pass {best_pass})",
+        file=sys.stderr,
+      )
       with open(best_file) as fh:
         llo_text = fh.read()
       # Count VLIW bundles (separated by `;;`)
