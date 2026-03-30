@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from kernel_evolve.evaluator import EvalRequest, EvalStatus
+from kernel_evolve.evaluator import BatchEvalRequest, BatchEvalResult, EvalRequest, EvalStatus
 from kernel_evolve.kube_evaluator import KubeConfig, KubeEvaluator
 
 
@@ -158,3 +158,101 @@ async def test_evaluate_skips_download_when_no_gcs_prefix(kube_config, eval_requ
   result = await evaluator.evaluate(eval_request)
   assert result.status == EvalStatus.SUCCESS
   evaluator._download_artifacts.assert_not_called()
+
+
+@pytest.fixture
+def batch_eval_request():
+  return BatchEvalRequest(
+    reference_code="def ref(): pass",
+    shapes=[{"M": 1024}],
+    variants=[
+      {"variant_id": "v1-tiling", "kernel_code": "def k1(): pass"},
+      {"variant_id": "v2-pipeline", "kernel_code": "def k2(): pass"},
+    ],
+    rtol=1e-2,
+    atol=1.0,
+  )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_success(kube_config, batch_eval_request):
+  evaluator = KubeEvaluator(kube_config)
+  r1_json = json.dumps({"variant_id": "v1-tiling", "status": "SUCCESS", "fitness": 1.5, "latency_ms": 0.5, "speedup": 1.5})
+  r2_json = json.dumps({"variant_id": "v2-pipeline", "status": "SUCCESS", "fitness": 1.2, "latency_ms": 0.8, "speedup": 1.2})
+  logs = f"setup...\nEVAL_RESULT:{r1_json}\nEVAL_RESULT:{r2_json}\ndone"
+
+  evaluator._create_configmap = AsyncMock()
+  evaluator._render_batch_job_yaml = lambda *_: "rendered"
+  evaluator._apply_job = AsyncMock()
+  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._read_logs = AsyncMock(return_value=logs)
+  evaluator._cleanup = AsyncMock()
+
+  result = await evaluator.evaluate_batch(batch_eval_request)
+  assert isinstance(result, BatchEvalResult)
+  assert len(result.results) == 2
+  assert result.results["v1-tiling"].speedup == 1.5
+  assert result.results["v2-pipeline"].speedup == 1.2
+  evaluator._cleanup.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_partial_failure(kube_config, batch_eval_request):
+  evaluator = KubeEvaluator(kube_config)
+  r1_json = json.dumps({"variant_id": "v1-tiling", "status": "SUCCESS", "fitness": 1.5, "latency_ms": 0.5, "speedup": 1.5})
+  r2_json = json.dumps({"variant_id": "v2-pipeline", "status": "COMPILE_ERROR", "error": "bad code"})
+  logs = f"EVAL_RESULT:{r1_json}\nEVAL_RESULT:{r2_json}\n"
+
+  evaluator._create_configmap = AsyncMock()
+  evaluator._render_batch_job_yaml = lambda *_: "rendered"
+  evaluator._apply_job = AsyncMock()
+  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._read_logs = AsyncMock(return_value=logs)
+  evaluator._cleanup = AsyncMock()
+
+  result = await evaluator.evaluate_batch(batch_eval_request)
+  assert result.results["v1-tiling"].status == EvalStatus.SUCCESS
+  assert result.results["v2-pipeline"].status == EvalStatus.COMPILE_ERROR
+  ranked = result.ranked()
+  assert len(ranked) == 1
+  assert ranked[0][0] == "v1-tiling"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_job_timeout(kube_config, batch_eval_request):
+  evaluator = KubeEvaluator(kube_config)
+  evaluator._create_configmap = AsyncMock()
+  evaluator._render_batch_job_yaml = lambda *_: "rendered"
+  evaluator._apply_job = AsyncMock()
+  evaluator._poll_job = AsyncMock(return_value="timed_out")
+  evaluator._cleanup = AsyncMock()
+
+  result = await evaluator.evaluate_batch(batch_eval_request)
+  assert len(result.results) == 2
+  for r in result.results.values():
+    assert r.status == EvalStatus.COMPILE_ERROR
+    assert "timed" in r.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_batch_downloads_artifacts(kube_config, batch_eval_request):
+  evaluator = KubeEvaluator(kube_config)
+  r1_json = json.dumps({
+    "variant_id": "v1-tiling", "status": "SUCCESS", "fitness": 1.5, "latency_ms": 0.5, "speedup": 1.5,
+    "metadata": {"artifacts_gcs_prefix": "gs://glaucis-profiles/batch-job/v1-tiling"},
+  })
+  r2_json = json.dumps({
+    "variant_id": "v2-pipeline", "status": "SUCCESS", "fitness": 1.2, "latency_ms": 0.8, "speedup": 1.2,
+  })
+  logs = f"EVAL_RESULT:{r1_json}\nEVAL_RESULT:{r2_json}\n"
+
+  evaluator._create_configmap = AsyncMock()
+  evaluator._render_batch_job_yaml = lambda *_: "rendered"
+  evaluator._apply_job = AsyncMock()
+  evaluator._poll_job = AsyncMock(return_value="Complete")
+  evaluator._read_logs = AsyncMock(return_value=logs)
+  evaluator._download_artifacts = AsyncMock()
+  evaluator._cleanup = AsyncMock()
+
+  result = await evaluator.evaluate_batch(batch_eval_request)
+  evaluator._download_artifacts.assert_called_once()
