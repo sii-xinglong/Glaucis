@@ -704,9 +704,18 @@ def main():
   _setup_dump_env()
 
   parser = argparse.ArgumentParser()
-  parser.add_argument("--eval-payload", required=True)
+  parser.add_argument("--eval-payload", required=False)
+  parser.add_argument("--eval-payload-file", required=False,
+                      help="Path to file containing base64 payload")
   args = parser.parse_args()
-  request = decode_request(args.eval_payload)
+  if args.eval_payload_file:
+    with open(args.eval_payload_file) as f:
+      b64_payload = f.read().strip()
+  elif args.eval_payload:
+    b64_payload = args.eval_payload
+  else:
+    parser.error("--eval-payload or --eval-payload-file is required")
+  request = decode_request(b64_payload)
   job_name = request.get("variant_id", "unknown")
 
   if not _has_tpu():
@@ -830,9 +839,18 @@ if __name__ == "__main__":
   # Parse payload to check for batch mode BEFORE setting up dump env.
   # In batch mode, subprocesses each set their own dump env.
   _parser = argparse.ArgumentParser()
-  _parser.add_argument("--eval-payload", required=True)
+  _parser.add_argument("--eval-payload", required=False)
+  _parser.add_argument("--eval-payload-file", required=False,
+                        help="Path to file containing base64 payload")
   _args = _parser.parse_args()
-  _request = decode_request(_args.eval_payload)
+  if _args.eval_payload_file:
+    with open(_args.eval_payload_file) as f:
+      _b64 = f.read().strip()
+  elif _args.eval_payload:
+    _b64 = _args.eval_payload
+  else:
+    _parser.error("--eval-payload or --eval-payload-file is required")
+  _request = decode_request(_b64)
 
   if _request.get("batch"):
     # Batch mode: skip TPU check in parent — each subprocess checks
