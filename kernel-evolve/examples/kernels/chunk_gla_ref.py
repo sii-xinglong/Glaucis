@@ -4,8 +4,6 @@ Uses lax.scan for sequential state propagation and einsum for attention.
 g_gamma-only path (per-head constant gate, no per-element gates).
 """
 
-import functools
-
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
