@@ -787,7 +787,7 @@ if __name__ == "__main__":
     result_lines = batch_dispatch(
       _request,
       evaluator_script=__file__,
-      per_variant_timeout=300,
+      per_variant_timeout=600,
     )
     for line in result_lines:
       print(line)
