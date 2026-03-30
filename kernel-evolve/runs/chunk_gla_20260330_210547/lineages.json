@@ -1,1 +1,50 @@
-{"lineages": [], "pruned": [], "round": 0}
+{
+  "round": 1,
+  "config": {
+    "top_k": 2,
+    "max_active_lineages": 4
+  },
+  "lineages": [
+    {
+      "id": "L1",
+      "parent": null,
+      "best_speedup": 0.876,
+      "best_kernel": "iteration_1/variants/mxu_vpu_overlap/kernel.py",
+      "direction": "mxu_vpu_overlap",
+      "history": ["iter-1-mxu_vpu_overlap"],
+      "stagnant_rounds": 0
+    },
+    {
+      "id": "L2",
+      "parent": null,
+      "best_speedup": 0.825,
+      "best_kernel": "iteration_1/variants/mxu_utilization/kernel.py",
+      "direction": "mxu_utilization",
+      "history": ["iter-1-mxu_utilization"],
+      "stagnant_rounds": 0
+    }
+  ],
+  "pruned": [
+    {
+      "id": "P1",
+      "best_speedup": 0.823,
+      "direction": "tiling_strategy",
+      "pruned_at_round": 1,
+      "reason": "below_top_k"
+    },
+    {
+      "id": "P2",
+      "best_speedup": 0.0,
+      "direction": "hbm_compute_overlap",
+      "pruned_at_round": 1,
+      "reason": "INCORRECT_emit_pipeline_argument_error"
+    },
+    {
+      "id": "P3",
+      "best_speedup": 0.0,
+      "direction": "memory_layout",
+      "pruned_at_round": 1,
+      "reason": "INCORRECT_blockspec_dimension_mismatch"
+    }
+  ]
+}
