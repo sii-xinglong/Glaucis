@@ -54,8 +54,10 @@ spec:
         resources:
           limits:
             google.com/tpu: "4"
+            ephemeral-storage: "200Gi"
           requests:
             google.com/tpu: "4"
+            ephemeral-storage: "100Gi"
         securityContext:
           privileged: true
         volumeMounts:

@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -10,6 +11,17 @@ from typing import Any
 
 def decode_request(b64_payload: str) -> dict[str, Any]:
   return json.loads(base64.b64decode(b64_payload).decode())
+
+
+def _cleanup_variant_artifacts(variant_id: str) -> None:
+  """Remove XLA dumps and trace data between variants to prevent storage exhaustion."""
+  for path in [
+    f"/tmp/ir_dumps/{variant_id}",
+    "/tmp/ir_dumps",
+    "/tmp/xplane_trace",
+  ]:
+    if os.path.exists(path):
+      shutil.rmtree(path, ignore_errors=True)
 
 
 def batch_dispatch(
@@ -73,5 +85,8 @@ def batch_dispatch(
         "error": f"Subprocess timeout after {per_variant_timeout}s",
       }
       results.append(f"EVAL_RESULT:{json.dumps(fallback)}")
+
+    finally:
+      _cleanup_variant_artifacts(variant_id)
 
   return results
