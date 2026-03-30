@@ -455,6 +455,73 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
         },
       }
 
+    # ── New LLO metrics ─────────────────────────────────────────────
+    vmem_allocation = None
+    bundle_density = None
+    dma_analysis = None
+    special_units = None
+
+    if best_file is not None:
+      # VMEM allocations
+      alloc_re = re.compile(
+        r"#allocation\d+\s*=\s*\w+\[[^\]]*\]"
+        r"(?:,\s*space=(\w+))?"
+        r",\s*size=0x([0-9a-fA-F]+)"
+      )
+      vmem_b = 0
+      smem_b = 0
+      alloc_count = 0
+      for am in alloc_re.finditer(llo_text):
+        space = am.group(1)
+        sz = int(am.group(2), 16)
+        if space == "smem":
+          smem_b += sz
+        else:
+          vmem_b += sz
+        alloc_count += 1
+      if alloc_count > 0:
+        vmem_allocation = {
+          "vmem_bytes": vmem_b,
+          "smem_bytes": smem_b,
+          "allocation_count": alloc_count,
+        }
+
+      # Bundle density (ILP)
+      segments = llo_text.split(";;")
+      if len(segments) > 1:
+        op_re = re.compile(r"^\s*%\w+\s*=", re.MULTILINE)
+        ops_list = []
+        for seg in segments[:-1]:
+          cnt = len(op_re.findall(seg))
+          if cnt > 0:
+            ops_list.append(cnt)
+        if ops_list:
+          bundle_density = {
+            "total_bundles": len(ops_list),
+            "avg_ops_per_bundle": sum(ops_list) / len(ops_list),
+            "max_ops_per_bundle": max(ops_list),
+          }
+
+      # DMA analysis
+      dma_cnt = len(re.findall(r"\bdma\.\w+", llo_text))
+      if dma_cnt > 0:
+        dma_analysis = {
+          "dma_count": dma_cnt,
+          "dma_sync_count": len(re.findall(r"\bdma\.done\.wait\b", llo_text)),
+          "double_buffering": bool(re.search(r"\bsand\.u32\s+1\b", llo_text)),
+        }
+
+      # Special hardware units
+      xlane = len(re.findall(r"\b\w+\.xlane\b", llo_text))
+      eup = len(re.findall(r"\bvpow2\b", llo_text)) + len(re.findall(r"\bvpop\.eup\b", llo_text))
+      nops = len(re.findall(r"^\s*nop\b", llo_text, re.MULTILINE))
+      if xlane + eup + nops > 0:
+        special_units = {
+          "xlane_ops": xlane,
+          "eup_ops": eup,
+          "nop_count": nops,
+        }
+
     # ── Parse HLO dumps (for HBM bandwidth) ────────────────────────
     hbm_bytes = None
 
@@ -501,6 +568,16 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
                 elems *= int(d)
               hbm_bytes += elems * _DTYPE_BYTES[inp_m.group(1)]
 
+    # HLO fusion analysis
+    fusion_analysis = None
+    if chosen_hlo is not None:
+      fc = len(re.findall(r"^fused_computation", hlo_text, re.MULTILINE))
+      cpf = bool(re.search(r"cross_program_prefetch_index=", hlo_text))
+      fusion_analysis = {
+        "fusion_count": fc,
+        "has_cross_program_prefetch": cpf,
+      }
+
     arithmetic_intensity = (
       flops / hbm_bytes if flops and hbm_bytes else None
     )
@@ -512,6 +589,11 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
       "hbm_bandwidth_bytes": hbm_bytes,
       "flops": flops,
       "arithmetic_intensity": arithmetic_intensity,
+      "vmem_allocation": vmem_allocation,
+      "bundle_density": bundle_density,
+      "dma_analysis": dma_analysis,
+      "fusion_analysis": fusion_analysis,
+      "special_units": special_units,
       "_hlo_file": chosen_hlo,
       "_llo_file": best_file,
     }
@@ -613,11 +695,17 @@ def main():
     )
 
   # Compute efficiency from deep profile FLOPs and measured latency
-  # TPU v7x per-chip peak: BF16 275 TFLOPS, FP8/INT8 550 TFLOPS (2x)
-  peak_flops = float(os.environ.get("PEAK_FLOPS", 550e12))  # default FP8
+  # TPU v7x per-chip peak: 2307 TFLOPS
+  peak_flops = float(os.environ.get("PEAK_FLOPS", 2307e12))
   if deep_profile.get("flops") and perf_result["latency_ms"] > 0:
     actual_fps = deep_profile["flops"] / (perf_result["latency_ms"] / 1000.0)
     deep_profile["compute_efficiency_pct"] = (actual_fps / peak_flops) * 100.0
+
+  # HBM bandwidth utilization (TPU v7x peak: 3690 GB/s)
+  peak_hbm_bw = float(os.environ.get("PEAK_HBM_BW", 3690e9))
+  if deep_profile.get("hbm_bandwidth_bytes") and perf_result["latency_ms"] > 0:
+    actual_bw = deep_profile["hbm_bandwidth_bytes"] / (perf_result["latency_ms"] / 1000.0)
+    deep_profile["hbm_bandwidth_utilization_pct"] = (actual_bw / peak_hbm_bw) * 100.0
 
   # ── Upload profile artifacts to GCS (non-fatal) ──
   artifacts = {}
