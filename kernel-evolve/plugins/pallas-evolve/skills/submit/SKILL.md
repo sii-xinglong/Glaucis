@@ -89,11 +89,21 @@ If the payload exceeds 900KB (921600 bytes):
 
 ### Step 4: Generate job name
 
+Include the kernel name from the config and a timestamp to prevent conflicts between concurrent optimizations:
+
 ```bash
-JOB_NAME="kernel-eval-batch-iter-${N}"
+KERNEL_NAME_SLUG=$(echo "{kernel_name}" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
+TIMESTAMP=$(date +%m%d-%H%M%S)
+JOB_NAME="${KERNEL_NAME_SLUG}-iter${N}-${TIMESTAMP}"
 ```
 
-Job names must be: lowercase, alphanumeric + hyphens, max 63 chars. Truncate if needed.
+Job names must be: lowercase, alphanumeric + hyphens, max 63 chars. Truncate if needed:
+
+```bash
+JOB_NAME=$(echo "${JOB_NAME}" | cut -c1-63 | sed 's/-$//')
+```
+
+Example: optimizing `chunk_gla` at iteration 3 → `chunk-gla-iter3-0330-142517`.
 
 ### Step 5: Create ConfigMap
 
