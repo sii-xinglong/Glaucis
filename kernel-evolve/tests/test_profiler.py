@@ -7,17 +7,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from kernel_evolve.profiler import (
+  analyze_bundle_density,
+  analyze_dma_ops,
   analyze_ir_dumps,
+  analyze_special_units,
   analyze_trace,
   capture_ir_dumps,
   capture_trace,
   compute_derived_metrics,
   count_flops_from_hlo,
+  count_hlo_fusions,
   count_vliw_bundles,
   estimate_hbm_bandwidth,
   find_final_llo_file,
   find_hlo_file,
   parse_mxu_distribution,
+  parse_vmem_allocations,
   stage_profile,
 )
 
@@ -349,3 +354,191 @@ def test_capture_ir_dumps_sets_env_and_runs(tmp_path):
   capture_ir_dumps(mock_kernel, {"M": 64}, dump_dir)
   assert mock_kernel.called
   assert os.path.isdir(dump_dir)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for extended IR metrics
+# ---------------------------------------------------------------------------
+
+VMEM_ALLOCATION_FIXTURE = """\
+#allocation0 = u8[524288], size=0x80000
+#allocation1 = f32[262144], size=0x100000
+#allocation2 = bf16[4096], size=0x2000
+#allocation3 = u8[512], space=smem, size=0x200
+"""
+
+HLO_FUSION_FIXTURE = """\
+HloModule jit_fused
+
+fused_computation.1 {
+  %p0 = f32[1024] parameter(0)
+  ROOT %add = f32[1024] add(%p0, %p0)
+}
+
+fused_computation.2 {
+  %p0 = f32[1024] parameter(0)
+  ROOT %mul = f32[1024] multiply(%p0, %p0)
+}
+
+fused_computation.3 {
+  %p0 = f32[1024] parameter(0)
+  ROOT %neg = f32[1024] negate(%p0)
+}
+
+ENTRY main {
+  %p0 = f32[1024] parameter(0), cross_program_prefetch_index=0
+  %fusion.1 = f32[1024] fusion(%p0), calls=fused_computation.1
+  %fusion.2 = f32[1024] fusion(%fusion.1), calls=fused_computation.2
+  ROOT %fusion.3 = f32[1024] fusion(%fusion.2), calls=fused_computation.3
+}
+"""
+
+LLO_DOUBLE_BUFFER_FIXTURE = """\
+%v0 = dma.hbm_to_vmem %r0
+%v1 = dma.vmem_to_hbm %r1
+%v2 = dma.done.wait %r2
+%s0 = sand.u32 1
+;;
+"""
+
+LLO_SPECIAL_UNITS_FIXTURE = """\
+  nop
+%v0 = vmax.xlane.f32.xlu0 %r0, %r1
+%v1 = vadd.xlane.f32 %r2, %r3
+%v2 = vpow2.f32 %r6
+%v3 = vpop.eup %r7
+  nop
+;;
+"""
+
+
+# ---------------------------------------------------------------------------
+# Tests: parse_vmem_allocations
+# ---------------------------------------------------------------------------
+
+
+def test_parse_vmem_allocations():
+  result = parse_vmem_allocations(VMEM_ALLOCATION_FIXTURE)
+  assert result is not None
+  # alloc0: 0x80000 = 524288, alloc1: 0x100000 = 1048576, alloc2: 0x2000 = 8192 -> vmem
+  # alloc3: 0x200 = 512 -> smem
+  assert result["vmem_bytes"] == 524288 + 1048576 + 8192
+  assert result["smem_bytes"] == 512
+  assert result["allocation_count"] == 4
+
+
+def test_parse_vmem_allocations_no_allocs():
+  result = parse_vmem_allocations("no allocations here")
+  assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: analyze_bundle_density
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_bundle_density():
+  result = analyze_bundle_density(LLO_TEXT_FIXTURE)
+  assert result is not None
+  # 4 ;; separators -> 4 bundles (last segment after final ;; is skipped)
+  # Bundle 1: %s0, %s1 -> 2 ops
+  # Bundle 2: %v0, %v1, %v2 -> 3 ops
+  # Bundle 3: %v3, %v4 -> 2 ops
+  # Bundle 4: %v5, %v6 -> 2 ops
+  assert result["total_bundles"] == 4
+  assert result["avg_ops_per_bundle"] == pytest.approx(2.25)
+  assert result["max_ops_per_bundle"] == 3
+
+
+def test_analyze_bundle_density_empty():
+  result = analyze_bundle_density("")
+  assert result is None
+
+
+def test_analyze_bundle_density_single_bundle():
+  llo = """\
+%v0 = vmatprep.subr.mxu0 %r0, %r1
+%v1 = vmatpush1.bf16.xpose.msra.mxu1 %r2
+;;
+"""
+  result = analyze_bundle_density(llo)
+  assert result is not None
+  assert result["total_bundles"] == 1
+  assert result["avg_ops_per_bundle"] == pytest.approx(2.0)
+  assert result["max_ops_per_bundle"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: analyze_dma_ops
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_dma_ops():
+  result = analyze_dma_ops(LLO_TEXT_FIXTURE)
+  assert result is not None
+  assert result["dma_count"] == 1  # dma.hbm_to_vmem
+  assert result["dma_sync_count"] == 0
+  assert result["double_buffering"] is False
+
+
+def test_analyze_dma_ops_double_buffering():
+  result = analyze_dma_ops(LLO_DOUBLE_BUFFER_FIXTURE)
+  assert result is not None
+  assert result["dma_count"] == 3  # dma.hbm_to_vmem, dma.vmem_to_hbm, dma.done.wait
+  assert result["dma_sync_count"] == 1  # dma.done.wait
+  assert result["double_buffering"] is True
+
+
+def test_analyze_dma_ops_no_dma():
+  result = analyze_dma_ops("no dma operations here")
+  assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: count_hlo_fusions
+# ---------------------------------------------------------------------------
+
+
+def test_count_hlo_fusions():
+  result = count_hlo_fusions(HLO_FUSION_FIXTURE)
+  assert result is not None
+  assert result["fusion_count"] == 3
+  assert result["has_cross_program_prefetch"] is True
+
+
+def test_count_hlo_fusions_no_fusions():
+  result = count_hlo_fusions(HLO_TEXT_FIXTURE)
+  assert result is not None
+  assert result["fusion_count"] == 0
+  assert result["has_cross_program_prefetch"] is False
+
+
+def test_count_hlo_fusions_empty():
+  result = count_hlo_fusions("")
+  assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: analyze_special_units
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_special_units():
+  result = analyze_special_units(LLO_TEXT_FIXTURE)
+  assert result is not None
+  assert result["xlane_ops"] == 1  # vmax.xlane
+  assert result["eup_ops"] == 1   # vpow2
+  assert result["nop_count"] == 0
+
+
+def test_analyze_special_units_multiple():
+  result = analyze_special_units(LLO_SPECIAL_UNITS_FIXTURE)
+  assert result is not None
+  assert result["xlane_ops"] == 2   # vmax.xlane, vadd.xlane
+  assert result["eup_ops"] == 2    # vpow2, vpop.eup
+  assert result["nop_count"] == 2
+
+
+def test_analyze_special_units_no_special():
+  result = analyze_special_units("plain instructions only")
+  assert result is None
