@@ -9,8 +9,6 @@ REGION="us-central1"
 GCP_SA="kernel-eval"
 K8S_SA="kernel-eval"
 K8S_NS="default"
-# Update this with your actual GKE cluster name
-GKE_CLUSTER="tpu7x-cluster"
 
 echo "=== Creating GCS bucket ==="
 gcloud storage buckets create "gs://${BUCKET}" \
@@ -20,9 +18,10 @@ gcloud storage buckets create "gs://${BUCKET}" \
   2>/dev/null || echo "Bucket already exists"
 
 echo "=== Setting lifecycle (7-day auto-delete) ==="
-cat <<'LIFECYCLE' | gcloud storage buckets update "gs://${BUCKET}" --lifecycle-file=-
-{"rule": [{"action": {"type": "Delete"}, "condition": {"age": 7}}]}
-LIFECYCLE
+LIFECYCLE_FILE=$(mktemp)
+echo '{"rule": [{"action": {"type": "Delete"}, "condition": {"age": 7}}]}' > "${LIFECYCLE_FILE}"
+gcloud storage buckets update "gs://${BUCKET}" --lifecycle-file="${LIFECYCLE_FILE}"
+rm -f "${LIFECYCLE_FILE}"
 
 echo "=== Creating GCP service account ==="
 gcloud iam service-accounts create "${GCP_SA}" \
@@ -43,7 +42,7 @@ echo "=== Binding K8s SA to GCP SA via Workload Identity ==="
 gcloud iam service-accounts add-iam-policy-binding \
   "${GCP_SA}@${PROJECT}.iam.gserviceaccount.com" \
   --role=roles/iam.workloadIdentityUser \
-  --member="principal://iam.googleapis.com/projects/785128357837/locations/global/workloadIdentityPools/${GKE_CLUSTER}.svc.id.goog/subject/ns/${K8S_NS}/sa/${K8S_SA}"
+  --member="serviceAccount:${PROJECT}.svc.id.goog[${K8S_NS}/${K8S_SA}]"
 
 echo "=== Annotating K8s SA ==="
 kubectl annotate serviceaccount "${K8S_SA}" -n "${K8S_NS}" \
