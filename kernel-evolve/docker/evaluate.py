@@ -309,7 +309,7 @@ def stage_profile(exec_globals, shapes, trace_dir="/tmp/xplane_trace"):
     return {"ok": False, "error": f"Profile error: {traceback.format_exc()}"}
 
 
-def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
+def stage_profile_deep(exec_globals, shapes, dump_dir=None):
   """Stage 4b: Deep IR profiling via HLO/LLO/Mosaic dumps.
 
   Dump flags are set at process startup (before JAX init) via
@@ -324,6 +324,8 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
   Non-fatal: returns ok=False on failure without stopping the evaluation pipeline.
   """
   try:
+    if dump_dir is None:
+      dump_dir = _get_dump_dir()
     import glob
     import re
     from pathlib import Path
@@ -601,7 +603,12 @@ def stage_profile_deep(exec_globals, shapes, dump_dir="/tmp/ir_dumps"):
     return {"ok": False, "error": f"Deep profile error: {traceback.format_exc()}"}
 
 
-_DUMP_DIR = "/tmp/ir_dumps"
+def _get_dump_dir() -> str:
+  """Return variant-specific dump dir when VARIANT_ID is set, else default."""
+  variant_id = os.environ.get("VARIANT_ID", "")
+  if variant_id:
+    return f"/tmp/ir_dumps/{variant_id}"
+  return "/tmp/ir_dumps"
 
 
 def _setup_dump_env():
@@ -610,21 +617,25 @@ def _setup_dump_env():
   Must be called before any JAX import or compilation. Dump files are
   generated during all subsequent compilations and parsed later by
   stage_profile_deep().
+
+  When VARIANT_ID env var is set (batch subprocess mode), dumps go to
+  a variant-specific subdirectory to avoid cross-variant file conflicts.
   """
-  os.makedirs(f"{_DUMP_DIR}/hlo", exist_ok=True)
-  os.makedirs(f"{_DUMP_DIR}/llo", exist_ok=True)
-  os.makedirs(f"{_DUMP_DIR}/mosaic", exist_ok=True)
+  dump_dir = _get_dump_dir()
+  os.makedirs(f"{dump_dir}/hlo", exist_ok=True)
+  os.makedirs(f"{dump_dir}/llo", exist_ok=True)
+  os.makedirs(f"{dump_dir}/mosaic", exist_ok=True)
 
   os.environ["XLA_FLAGS"] = (
-    f"--xla_dump_hlo_as_text --xla_dump_to={_DUMP_DIR}/hlo "
+    f"--xla_dump_hlo_as_text --xla_dump_to={dump_dir}/hlo "
     + os.environ.get("XLA_FLAGS", "")
   )
   os.environ["LIBTPU_INIT_ARGS"] = (
-    f"--xla_jf_dump_to={_DUMP_DIR}/llo "
+    f"--xla_jf_dump_to={dump_dir}/llo "
     "--xla_jf_dump_hlo_text=true "
     "--xla_jf_dump_llo_text=true "
     "--xla_jf_emit_annotations=true "
-    f"--xla_mosaic_dump_to={_DUMP_DIR}/mosaic "
+    f"--xla_mosaic_dump_to={dump_dir}/mosaic "
     "--xla_mosaic_enable_llo_source_annotations=true "
     "--xla_enable_custom_call_region_trace=true "
     "--xla_xprof_register_llo_debug_info=true "

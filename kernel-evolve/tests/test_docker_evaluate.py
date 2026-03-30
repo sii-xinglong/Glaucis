@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -134,6 +135,20 @@ def test_batch_dispatch_handles_subprocess_crash():
   parsed = json.loads(results[0].split("EVAL_RESULT:", 1)[1])
   assert parsed["status"] == "COMPILE_ERROR"
   assert parsed["variant_id"] == "v1-crash"
+
+
+def test_setup_dump_env_uses_variant_id():
+  """_get_dump_dir should return variant-specific path when VARIANT_ID is set."""
+  evaluate = _load_evaluate_module()
+
+  # Without VARIANT_ID
+  with patch.dict(os.environ, {}, clear=True):
+    os.environ.pop("VARIANT_ID", None)
+    assert evaluate._get_dump_dir() == "/tmp/ir_dumps"
+
+  # With VARIANT_ID
+  with patch.dict(os.environ, {"VARIANT_ID": "v1-tiling"}):
+    assert evaluate._get_dump_dir() == "/tmp/ir_dumps/v1-tiling"
 
 
 def test_batch_dispatch_handles_timeout():
