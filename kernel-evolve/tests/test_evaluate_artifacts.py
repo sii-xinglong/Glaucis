@@ -310,3 +310,74 @@ def test_internal_fields_stripped_from_eval_result():
   assert "_llo_file" not in clean
   assert "vliw_bundle_count" in clean
   assert "ok" in clean
+
+
+def test_stage_profile_deep_extended_metrics(tmp_path):
+    """stage_profile_deep should return new extended metrics."""
+    from evaluate import stage_profile_deep
+
+    llo_dir = tmp_path / "llo"
+    llo_dir.mkdir(parents=True)
+    llo_text = """\
+#allocation0 = f32[262144], size=0x100000
+#allocation1 = u8[512], space=smem, size=0x200
+;;
+%v0 = vmatmul.mubr.bf16.gmra.mxu0 %r0
+%v1 = vmax.xlane.f32.xlu0 %r1
+;;
+%v2 = dma.hbm_to_vmem %r2
+%s3 = sand.u32 1, %s0
+dma.done.wait %flag0
+;;
+%v4 = vpow2.f32 %r3
+nop
+;;
+"""
+    llo_file = llo_dir / "12345-pallas_tpu_kernel-79-final_bundles.txt"
+    llo_file.write_text(llo_text)
+
+    hlo_dir = tmp_path / "hlo"
+    hlo_dir.mkdir(parents=True)
+    hlo_text = """\
+HloModule test
+fused_computation.1 { ROOT %r = f32[1] parameter(0) }
+ENTRY main {
+  %p0 = bf16[8,2048,128] parameter(0)
+  ROOT %out = bf16[8,2048,128] custom-call(%p0), custom_call_target="tpu_custom_call"
+}
+"""
+    (hlo_dir / "module.after_optimizations.txt").write_text(hlo_text)
+
+    mock_out = MagicMock()
+    mock_out.block_until_ready = MagicMock()
+    mock_kernel_fn = MagicMock(return_value=mock_out)
+    exec_globals = {"optimized_compute": mock_kernel_fn}
+
+    result = stage_profile_deep(exec_globals, [{"M": 1024}], dump_dir=str(tmp_path))
+
+    assert result["ok"] is True
+
+    # VMEM allocation
+    assert result["vmem_allocation"] is not None
+    assert result["vmem_allocation"]["vmem_bytes"] == 0x100000
+    assert result["vmem_allocation"]["smem_bytes"] == 0x200
+
+    # Bundle density
+    assert result["bundle_density"] is not None
+    assert result["bundle_density"]["max_ops_per_bundle"] >= 2
+
+    # DMA analysis
+    assert result["dma_analysis"] is not None
+    assert result["dma_analysis"]["dma_count"] >= 1
+    assert result["dma_analysis"]["double_buffering"] is True
+    assert result["dma_analysis"]["dma_sync_count"] == 1
+
+    # Fusion analysis
+    assert result["fusion_analysis"] is not None
+    assert result["fusion_analysis"]["fusion_count"] == 1
+
+    # Special units
+    assert result["special_units"] is not None
+    assert result["special_units"]["xlane_ops"] == 1
+    assert result["special_units"]["eup_ops"] == 1
+    assert result["special_units"]["nop_count"] == 1
