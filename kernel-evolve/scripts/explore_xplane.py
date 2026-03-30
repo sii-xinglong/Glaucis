@@ -190,30 +190,99 @@ def main():
         result = dump_tool(xplane_path, tool_name, params)
         print_section(tool_name, result, max_lines=300)
 
-    # Step 5: Also dump trace_viewer event names for reference
-    print("\n--- Trace viewer: unique event names by category ---")
+    # Step 5: Analyze trace_viewer for LLO utilization and hardware unit events
+    print("\n--- Trace viewer: analyzing for LLO utilization events ---")
     tv_result = dump_tool(xplane_path, "trace_viewer", {})
     if tv_result.get("ok"):
         events = safe_json_parse(tv_result["data"])
         if isinstance(events, dict):
             events = events.get("traceEvents", [])
 
-        # Categorize events
-        categories = {}
+        # Collect all process/thread metadata
+        process_names = {}  # pid -> name
+        thread_names = {}   # (pid, tid) -> name
         for evt in events:
-            cat = evt.get("cat", "unknown")
-            name = evt.get("name", "")
-            if cat not in categories:
-                categories[cat] = set()
-            categories[cat].add(name)
+            if evt.get("ph") == "M":
+                if evt.get("name") == "process_name":
+                    process_names[evt.get("pid")] = evt.get("args", {}).get("name", "")
+                elif evt.get("name") == "thread_name":
+                    thread_names[(evt.get("pid"), evt.get("tid"))] = evt.get("args", {}).get("name", "")
 
-        for cat in sorted(categories.keys()):
-            names = sorted(categories[cat])
-            print(f"\n  Category '{cat}': {len(names)} unique names")
-            for n in names[:20]:
-                print(f"    - {n}")
-            if len(names) > 20:
-                print(f"    ... and {len(names) - 20} more")
+        print(f"\n  Total events: {len(events)}")
+        print(f"\n  Processes ({len(process_names)}):")
+        for pid, name in sorted(process_names.items(), key=lambda x: x[0]):
+            print(f"    pid={pid}: {name}")
+
+        print(f"\n  Threads ({len(thread_names)}):")
+        for (pid, tid), name in sorted(thread_names.items()):
+            pname = process_names.get(pid, "?")
+            print(f"    pid={pid} ({pname}), tid={tid}: {name}")
+
+        # Look for LLO utilization events specifically
+        llo_events = []
+        utilization_events = []
+        hw_unit_events = []
+        for evt in events:
+            name = (evt.get("name") or "").lower()
+            args = evt.get("args", {})
+            # Check for LLO-related events
+            if "llo" in name or "llo" in str(args).lower():
+                llo_events.append(evt)
+            # Check for utilization events
+            if "utilization" in name or "utilization" in str(args).lower():
+                utilization_events.append(evt)
+            # Check for hardware unit events (scalar, vector, mxu, dma)
+            for kw in ["scalar", "vector", "mxu", "matrix", "dma", "alu"]:
+                if kw in name or kw in str(args).lower():
+                    hw_unit_events.append(evt)
+                    break
+
+        print(f"\n  LLO-related events: {len(llo_events)}")
+        for evt in llo_events[:30]:
+            print(f"    name={evt.get('name')}, ph={evt.get('ph')}, "
+                  f"dur={evt.get('dur', 'N/A')}, args={evt.get('args', {})}")
+        if len(llo_events) > 30:
+            print(f"    ... and {len(llo_events) - 30} more")
+
+        print(f"\n  Utilization-related events: {len(utilization_events)}")
+        for evt in utilization_events[:30]:
+            print(f"    name={evt.get('name')}, ph={evt.get('ph')}, "
+                  f"dur={evt.get('dur', 'N/A')}, args={evt.get('args', {})}")
+        if len(utilization_events) > 30:
+            print(f"    ... and {len(utilization_events) - 30} more")
+
+        print(f"\n  Hardware unit events (scalar/vector/mxu/dma/alu): {len(hw_unit_events)}")
+        for evt in hw_unit_events[:30]:
+            print(f"    name={evt.get('name')}, ph={evt.get('ph')}, "
+                  f"dur={evt.get('dur', 'N/A')}, args={evt.get('args', {})}")
+        if len(hw_unit_events) > 30:
+            print(f"    ... and {len(hw_unit_events) - 30} more")
+
+        # Categorize all events by process+thread for structure overview
+        print("\n  --- Events per process/thread (with duration events) ---")
+        thread_stats = {}
+        for evt in events:
+            if "dur" not in evt:
+                continue
+            pid = evt.get("pid")
+            tid = evt.get("tid")
+            key = (pid, tid)
+            if key not in thread_stats:
+                thread_stats[key] = {"count": 0, "names": set(), "total_dur": 0}
+            thread_stats[key]["count"] += 1
+            thread_stats[key]["names"].add(evt.get("name", ""))
+            thread_stats[key]["total_dur"] += evt.get("dur", 0)
+
+        for (pid, tid), stats in sorted(thread_stats.items()):
+            pname = process_names.get(pid, "?")
+            tname = thread_names.get((pid, tid), "?")
+            sample_names = sorted(stats["names"])[:5]
+            print(f"    [{pname}] thread '{tname}' (pid={pid}, tid={tid}): "
+                  f"{stats['count']} events, total_dur={stats['total_dur']:.0f}us")
+            for n in sample_names:
+                print(f"      - {n}")
+            if len(stats["names"]) > 5:
+                print(f"      ... and {len(stats['names']) - 5} more unique names")
 
     print("\n" + "=" * 80)
     print("  EXPLORATION COMPLETE")
