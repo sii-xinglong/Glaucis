@@ -36,7 +36,13 @@ Read `iteration_{N}/eval_result.json`. The JSON has this structure:
       "hbm_bandwidth_bytes": 14680064,
       "arithmetic_intensity": 72.8,
       "flops": 1.07e9,
-      "compute_efficiency_pct": 45.2
+      "compute_efficiency_pct": 45.2,
+      "hbm_bandwidth_utilization_pct": 2.1,
+      "vmem_allocation": {"vmem_bytes": 1572864, "smem_bytes": 1024, "allocation_count": 8},
+      "bundle_density": {"total_bundles": 4302, "avg_ops_per_bundle": 3.2, "max_ops_per_bundle": 7},
+      "dma_analysis": {"dma_count": 42, "dma_sync_count": 20, "double_buffering": true},
+      "fusion_analysis": {"fusion_count": 0, "has_cross_program_prefetch": false},
+      "special_units": {"xlane_ops": 15, "eup_ops": 8, "nop_count": 3}
     }
   }
 }
@@ -77,6 +83,16 @@ Extract deep profiling metrics from `metadata.profile` (may be absent if profili
 - `hbm_bandwidth_bytes`: total HBM bytes read + written per invocation.
 - `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
 - `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
+- `hbm_bandwidth_utilization_pct`: actual HBM bandwidth / peak bandwidth as percentage. >80% = near bandwidth ceiling.
+- `vmem_allocation.vmem_bytes`: total on-chip VMEM allocated. High values indicate VMEM pressure.
+- `bundle_density.avg_ops_per_bundle`: average operations per VLIW bundle. Higher = better ILP. <2.0 = poor slot utilization.
+- `bundle_density.max_ops_per_bundle`: peak ILP achieved. TPU v7x can do up to 8 ops/bundle.
+- `dma_analysis.dma_count`: total DMA transfer operations. High count may indicate excessive data movement.
+- `dma_analysis.double_buffering`: whether the kernel uses double buffering (iteration % 2 buffer slots). False = DMA cannot overlap with compute.
+- `fusion_analysis.fusion_count`: number of XLA fused_computation blocks. More fusions = more HBM round-trips. Pallas kernels should have 0.
+- `special_units.xlane_ops`: cross-lane reduction operations (XLU). Used for max/sum reductions.
+- `special_units.eup_ops`: hardware exponential unit operations. Used for exp() via vpow2.
+- `special_units.nop_count`: empty VLIW slots. High count indicates pipeline bubbles.
 
 **Multi-signal bottleneck classification:**
 
@@ -88,6 +104,11 @@ Extract deep profiling metrics from `metadata.profile` (may be absent if profili
 | `dual_ratio < 0.5` | — | Single-MXU: only one MXU active, matmul dims may be wrong |
 | `compute_efficiency_pct < 10` | — | Very far from peak: major pipeline stalls or register spills |
 | `vliw_bundle_count increasing` | vs prior iteration | Complexity bloat: kernel getting more complex without speedup |
+| `avg_ops_per_bundle < 2.0` | — | Low ILP: VLIW slots underutilized, compiler couldn't parallelize |
+| `double_buffering == false` | — | No double buffering: DMA and compute cannot overlap |
+| `fusion_count > 3` | — | Too many fusions: excessive HBM round-trips between fusions |
+| `nop_count > 50` | — | Pipeline bubbles: compiler couldn't fill VLIW slots with useful work |
+| `hbm_bandwidth_utilization_pct > 80` | — | Near HBM bandwidth ceiling: memory-bound, reduce data movement |
 
 **Combined diagnosis patterns:**
 - **Low arithmetic_intensity + high compute_ratio** → Compute-bound but under-utilizing memory bandwidth. Consider larger tiles or prefetching.
@@ -208,6 +229,12 @@ Write `iteration_{N}/analysis.md`:
 | arithmetic_intensity | {arithmetic_intensity} | {low/medium/high} |
 | compute_efficiency | {compute_efficiency_pct}% | {vs peak FLOPS} |
 | HBM bandwidth | {hbm_bandwidth_bytes} bytes | {comparison to optimal} |
+| HBM BW utilization | {hbm_bandwidth_utilization_pct}% | {near ceiling / headroom} |
+| VMEM allocated | {vmem_allocation.vmem_bytes} bytes | {pressure level} |
+| Bundle density (avg) | {avg_ops_per_bundle} ops/bundle | {poor/fair/good} |
+| DMA transfers | {dma_count} ({double_buffering ? "double-buffered" : "single-buffered"}) | {assessment} |
+| Pipeline NOPs | {nop_count} | {low/concerning/high} |
+| HLO fusions | {fusion_count} | {0 = ideal for Pallas} |
 
 ### Bottleneck
 {Multi-signal diagnosis — primary and secondary bottlenecks}
