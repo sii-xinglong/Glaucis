@@ -161,3 +161,12 @@ When writing kernel mutations, follow these TPU v7x Ironwood constraints:
 - Block size 512 may OOM on 2048x2048 matrices (VMEM limit)
 - Accumulator dtype should be `jnp.float32` for numerical stability, cast to `bfloat16` on store
 - Grid dimensions must evenly divide matrix dimensions
+
+**Deep profiling signals (from eval_result.json → metadata.profile):**
+- `vliw_bundle_count`: Total compiled VLIW bundles. Fewer bundles = simpler kernel = faster. Compare across iterations to detect complexity bloat.
+- `mxu_utilization.dual_ratio`: How evenly both MXUs (matrix units) are used. 1.0 = both equally loaded. <0.5 means one MXU is idle — check matmul dimensions.
+- `hbm_bandwidth_bytes`: Total HBM memory traffic per invocation. Lower = better. Pallas should keep data in VMEM to avoid HBM round-trips.
+- `arithmetic_intensity` (FLOPs/byte): Higher means more compute per byte of memory traffic. Low values indicate memory-bound behavior.
+- `compute_efficiency_pct`: Actual throughput vs TPU v7x peak (275 TFLOPS BF16). Shows headroom for optimization.
+
+**When analyzing iteration results, check all signals — not just speedup and compute_ratio. VLIW bundle count and MXU dual_ratio are leading indicators of kernel quality.**
