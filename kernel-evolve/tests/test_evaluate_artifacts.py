@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Add the docker dir to path so we can import evaluate
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "docker"))
