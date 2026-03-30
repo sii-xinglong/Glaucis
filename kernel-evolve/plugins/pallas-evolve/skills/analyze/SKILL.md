@@ -32,6 +32,16 @@ Each `eval_result.json` has this structure:
   "memory_transfer_ratio": 0.15,
   "metadata": {
     "reference_latency_ms": 3.45,
+    "hw_utilization": {
+      "mxu_util_pct": 23.9,
+      "scalar_alu_util_pct": 20.6,
+      "vector_alu_util_pct": 8.6,
+      "vector_load_util_pct": 9.5,
+      "vector_store_util_pct": 0.7,
+      "vector_eup_util_pct": 0.0,
+      "vector_fills": 0,
+      "vector_spills": 0
+    },
     "profile": {
       "vliw_bundle_count": 4302,
       "mxu_utilization": {"mxu0": 1396, "mxu1": 1383, "dual_ratio": 0.99},
@@ -83,15 +93,6 @@ For each variant, classify status and analyze performance:
   - `hbm_bandwidth_bytes`: total HBM bytes read + written per invocation.
   - `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
   - `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
-
-- **Multi-signal bottleneck classification:**
-
-  Extract deep profiling metrics from `metadata.profile` (may be absent if profiling failed):
-  - `vliw_bundle_count`: total VLIW bundles in the compiled kernel. Lower = simpler/faster.
-  - `mxu_utilization.dual_ratio`: how evenly both MXUs are used (0.0-1.0). 1.0 = perfect.
-  - `hbm_bandwidth_bytes`: total HBM bytes read + written per invocation.
-  - `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
-  - `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
   - `hbm_bandwidth_utilization_pct`: actual HBM bandwidth / peak bandwidth as percentage. >80% = near bandwidth ceiling.
   - `vmem_allocation.vmem_bytes`: total on-chip VMEM allocated. High values indicate VMEM pressure.
   - `bundle_density.avg_ops_per_bundle`: average operations per VLIW bundle. Higher = better ILP. <2.0 = poor slot utilization.
@@ -103,34 +104,47 @@ For each variant, classify status and analyze performance:
   - `special_units.eup_ops`: hardware exponential unit operations. Used for exp() via vpow2.
   - `special_units.nop_count`: empty VLIW slots. High count indicates pipeline bubbles.
 
+- **Multi-signal bottleneck classification:**
+
+  Extract hardware utilization metrics from `metadata.hw_utilization` (may be absent if counter events were not captured):
+  - `mxu_util_pct`: runtime MXU utilization percentage (time-weighted). Higher = MXU is busier.
+  - `scalar_alu_util_pct`: runtime Scalar ALU utilization percentage. High values with low MXU suggest scalar-heavy code.
+  - `vector_alu_util_pct`: runtime Vector ALU utilization percentage. Indicates vector computation activity.
+  - `vector_load_util_pct`: runtime Vector Load utilization. High values indicate heavy VMEM reads.
+  - `vector_store_util_pct`: runtime Vector Store utilization. High values indicate heavy VMEM writes.
+  - `vector_eup_util_pct`: runtime EUP utilization. Non-zero when using exp/log/pow transcendentals.
+  - `vector_fills`: total register fills (loads from VMEM to registers due to register pressure). >0 indicates register spills are occurring.
+  - `vector_spills`: total register spills (stores from registers to VMEM due to register pressure). >0 indicates register pressure.
+
   | Signal | Threshold | Diagnosis |
   |--------|-----------|-----------|
-  | `compute_ratio < 0.50` | -- | Memory-bound: VPU stalling on DMA/SyncWait |
-  | `compute_ratio >= 0.75` | -- | Compute-bound: VPU busy, optimize ALU ops |
-  | `arithmetic_intensity < 10` | -- | Low arithmetic intensity: too much HBM traffic per FLOP |
-  | `dual_ratio < 0.5` | -- | Single-MXU: only one MXU active, matmul dims may be wrong |
-  | `compute_efficiency_pct < 10` | -- | Very far from peak: major pipeline stalls or register spills |
-  | `vliw_bundle_count increasing` | vs prior round's best | Complexity bloat: kernel getting more complex without speedup |
+  | `compute_ratio < 0.50` | — | Memory-bound: VPU stalling on DMA/SyncWait |
+  | `compute_ratio >= 0.75` | — | Compute-bound: VPU busy, optimize ALU ops |
+  | `arithmetic_intensity < 10` | — | Low arithmetic intensity: too much HBM traffic per FLOP |
+  | `dual_ratio < 0.5` | — | Single-MXU: only one MXU active, matmul dims may be wrong |
+  | `compute_efficiency_pct < 10` | — | Very far from peak: major pipeline stalls or register spills |
+  | `vliw_bundle_count increasing` | vs prior iteration | Complexity bloat: kernel getting more complex without speedup |
+  | `avg_ops_per_bundle < 2.0` | — | Low ILP: VLIW slots underutilized, compiler couldn't parallelize |
+  | `double_buffering == false` | — | No double buffering: DMA and compute cannot overlap |
+  | `fusion_count > 3` | — | Too many fusions: excessive HBM round-trips between fusions |
+  | `nop_count > 50` | — | Pipeline bubbles: compiler couldn't fill VLIW slots with useful work |
+  | `hbm_bandwidth_utilization_pct > 80` | — | Near HBM bandwidth ceiling: memory-bound, reduce data movement |
+  | `vector_spills > 0` | — | Register spills: compiler ran out of registers, spilling to VMEM. Reduces throughput. |
+  | `vector_fills > 0` | — | Register fills: data reloaded from VMEM due to prior spills. Adds latency. |
+  | `mxu_util_pct < 15` (compute kernel) | — | MXU underutilized at runtime: matmul not dominating execution time |
+  | `scalar_alu_util_pct > mxu_util_pct` | — | Scalar-heavy execution: control flow or index computation dominating over matmul |
+  | `max(units) - min(units) > 30` | across non-zero units | Poor hardware overlap: units executing sequentially rather than in parallel |
 
 - **Combined diagnosis patterns:**
   - **Low arithmetic_intensity + high compute_ratio** -> Compute-bound but under-utilizing memory bandwidth. Consider larger tiles or prefetching.
   - **Low dual_ratio + compute-bound** -> Only one MXU active. Check if matmul dimensions are multiples of 128 for dual-MXU scheduling.
   - **Growing vliw_bundle_count + flat speedup** -> Kernel complexity bloat. Simplify the algorithm.
   - **Low compute_efficiency_pct + high compute_ratio** -> Near-peak VPU util but far from peak FLOPS. Check for unnecessary recomputation or register pressure.
-
-| Signal | Threshold | Diagnosis |
-|--------|-----------|-----------|
-| `compute_ratio < 0.50` | — | Memory-bound: VPU stalling on DMA/SyncWait |
-| `compute_ratio >= 0.75` | — | Compute-bound: VPU busy, optimize ALU ops |
-| `arithmetic_intensity < 10` | — | Low arithmetic intensity: too much HBM traffic per FLOP |
-| `dual_ratio < 0.5` | — | Single-MXU: only one MXU active, matmul dims may be wrong |
-| `compute_efficiency_pct < 10` | — | Very far from peak: major pipeline stalls or register spills |
-| `vliw_bundle_count increasing` | vs prior iteration | Complexity bloat: kernel getting more complex without speedup |
-| `avg_ops_per_bundle < 2.0` | — | Low ILP: VLIW slots underutilized, compiler couldn't parallelize |
-| `double_buffering == false` | — | No double buffering: DMA and compute cannot overlap |
-| `fusion_count > 3` | — | Too many fusions: excessive HBM round-trips between fusions |
-| `nop_count > 50` | — | Pipeline bubbles: compiler couldn't fill VLIW slots with useful work |
-| `hbm_bandwidth_utilization_pct > 80` | — | Near HBM bandwidth ceiling: memory-bound, reduce data movement |
+  - **vector_spills > 0 + low compute_efficiency** -> Register pressure is killing performance. Reduce live variables: shrink block sizes, split accumulation across loop iterations, or reduce intermediate arrays.
+  - **vector_spills > 0 + high vliw_bundle_count** -> Register pressure from kernel complexity. Simplify the kernel: fewer intermediate values, recompute instead of storing, or reduce block dimensions.
+  - **High scalar_alu + low mxu_util** -> Control-flow or index arithmetic dominating. Simplify indexing, reduce conditionals, use `pl.program_id()` instead of computed indices.
+  - **Multiple units > 20% util but none > 50%** -> Units executing in sequence rather than overlapping. Restructure to interleave MXU, Vector, and DMA operations. Check VLIW bundle density for co-scheduling opportunities.
+  - **High vector_load + high vector_store + low mxu** -> Data shuffling dominates. Reduce VMEM traffic via better tiling or in-register accumulation.
 
 - Determine a mutation `direction` label for this variant (e.g., `tiling_strategy`, `block_size`, `k_tiling`, `pipelining`, `mxu_scheduling`, `scratch_memory`, etc.) from the variant's strategy.md or directory name.
 
@@ -273,6 +287,9 @@ If this is Round 2+, track per-lineage metrics across rounds. Read previous roun
 | `mxu_utilization.dual_ratio` | Increasing toward 1.0 | Decreasing |
 | `arithmetic_intensity` | Increasing | Decreasing (more memory traffic) |
 | `compute_efficiency_pct` | Increasing | Decreasing |
+| `mxu_util_pct` | Increasing | Decreasing (MXU becoming idle) |
+| `vector_spills` | Decreasing toward 0 | Increasing (growing register pressure) |
+| `scalar_alu_util_pct` | Decreasing (less overhead) | Increasing (more control flow) |
 
 Flag per-lineage:
 - **Regressions**: speedup decreased from previous round for this lineage
@@ -280,6 +297,8 @@ Flag per-lineage:
 - **"All-cost improvement"**: speedup improved but bundle count doubled -- likely unsustainable
 - **"Diminishing returns"**: each round yields <2% improvement -- consider a different direction
 - **"MXU regression"**: dual_ratio dropped after a code change -- the change broke MXU scheduling
+- **"Register spill introduced"**: vector_spills went from 0 to >0 -- the new kernel variant has register pressure, likely from larger blocks or more intermediates
+- **"Overlap degradation"**: hardware units went from concurrent to sequential utilization -- restructure VLIW scheduling
 
 ### Step 8: Write outputs
 
@@ -324,6 +343,11 @@ Write two output files:
 | DMA transfers | {dma_count} ({double_buffering ? "double-buffered" : "single-buffered"}) | {assessment} |
 | Pipeline NOPs | {nop_count} | {low/concerning/high} |
 | HLO fusions | {fusion_count} | {0 = ideal for Pallas} |
+| MXU util (runtime) | {mxu_util_pct}% | {low/medium/high} |
+| Scalar ALU util | {scalar_alu_util_pct}% | {high = control-flow heavy} |
+| Vector ALU util | {vector_alu_util_pct}% | {assessment} |
+| Vector fills/spills | {vector_fills}/{vector_spills} | {0/0 = ideal, >0 = register pressure} |
+| HW unit overlap | {overlap assessment} | {good overlap / sequential execution} |
 
 **Bottleneck**: {Multi-signal diagnosis}
 **Suggestions**: {Specific optimization suggestions}
@@ -410,6 +434,20 @@ When generating suggestions for each variant, use these categories based on the 
 - Try pipelining to overlap compute and memory
 - Adjust block sizes to find the sweet spot
 - Profile deeper: which operations are slow?
+
+**Register spills (vector_spills > 0 or vector_fills > 0):**
+- Reduce block dimensions to lower the number of live arrays (e.g., BM=256→128)
+- Split accumulation across multiple loop iterations instead of holding all partial sums simultaneously
+- Replace intermediate arrays with in-place updates or recomputation
+- Minimize the number of `Ref` slices held across `fori_loop` iterations
+- If both fills and spills are high, the kernel fundamentally exceeds register capacity — restructure the algorithm
+
+**Poor hardware unit overlap (units executing sequentially, max-min util gap > 30%):**
+- Interleave MXU matmul with Vector ALU reductions in the same loop body so both units stay busy
+- Start DMA prefetch for the next tile before MXU finishes the current tile (pipeline the data movement)
+- Move index computation (Scalar ALU) outside the inner loop to free scalar units during compute
+- Ensure block dimensions allow the compiler to co-schedule operations into the same VLIW bundle
+- If `avg_ops_per_bundle < 2.0` and overlap is poor, the compiler can't parallelize — simplify the kernel to give it more scheduling freedom
 
 **Regression detected:**
 - Compare the current kernel with the lineage's previous best
