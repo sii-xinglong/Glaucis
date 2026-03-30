@@ -48,7 +48,6 @@ class BatchConfig(BaseModel):
   variants_per_round: int = Field(default=1, ge=1)
   top_k: int = Field(default=1, ge=1)
   max_active_lineages: int = Field(default=4, ge=1)
-  diversity_directions: list[str] = Field(default_factory=list)
 
 
 class EvolveConfig(BaseModel):

@@ -35,10 +35,3 @@ batch:
   variants_per_round: 5
   top_k: 2
   max_active_lineages: 4
-  diversity_directions:
-    - "tiling_strategy"
-    - "hbm_compute_overlap"
-    - "mxu_vpu_overlap"
-    - "memory_layout"
-    - "mxu_utilization"
-    - "vectorization"
