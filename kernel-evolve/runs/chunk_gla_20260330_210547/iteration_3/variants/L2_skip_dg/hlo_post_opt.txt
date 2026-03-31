@@ -1,0 +1,48 @@
+HloModule jit_broadcast_in_dim, is_scheduled=true, entry_computation_layout={(f32[16]{0:T(128)})->f32[1,16]{1,0:T(1,128)}}, allow_spmd_sharding_propagation_to_parameters={true}, allow_spmd_sharding_propagation_to_output={true}
+
+FileNames
+1 "/workspace/kernel-evolve/docker/evaluate.py"
+2 "<string>"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "stage_correctness"
+4 "simple_compute"
+5 "simple_compute.<locals>.loss_fn"
+6 "chunk_gla_ref"
+7 "chunk_gla_ref.<locals>._fwd"
+8 "chunk_gla_fwd_ref"
+9 "_chunk_fwd_h_scan"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=870 end_line=870 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=731 end_line=738 column=19 end_column=3}
+3 {file_name_id=1 function_name_id=3 line=100 end_line=100 column=16 end_column=31}
+4 {file_name_id=2 function_name_id=4 line=240 end_line=240 column=14 end_column=73}
+5 {file_name_id=2 function_name_id=5 line=237 end_line=238 column=15 end_column=78}
+6 {file_name_id=2 function_name_id=6 line=224 end_line=224 column=11 end_column=28}
+7 {file_name_id=2 function_name_id=7 line=210 end_line=210 column=28 end_column=82}
+8 {file_name_id=2 function_name_id=8 line=113 end_line=113 column=12 end_column=79}
+9 {file_name_id=2 function_name_id=9 line=30 end_line=30 column=10 end_column=30}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=7}
+8 {file_location_id=8 parent_frame_id=8}
+9 {file_location_id=9 parent_frame_id=9}
+
+
+ENTRY %main.1 (args_0_.1: f32[16]) -> f32[1,16] {
+  %args_0_.1 = f32[16]{0:T(128)} parameter(0), metadata={op_name="args[0]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %copy-start = (f32[16]{0:T(128)S(1)}, f32[16]{0:T(128)}, u32[]{:S(2)}) copy-start(%args_0_.1)
+  %copy-done = f32[16]{0:T(128)S(1)} copy-done(%copy-start)
+  %bitcast.1 = f32[1,16]{1,0:T(1,128)S(1)} bitcast(%copy-done)
+  ROOT %copy.1 = f32[1,16]{1,0:T(1,128)} copy(%bitcast.1), backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"5872027"}],"used_scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"retry_config":{"retry_count":"0"},"aliasing_operands":{"lists":[]}}
+}
+

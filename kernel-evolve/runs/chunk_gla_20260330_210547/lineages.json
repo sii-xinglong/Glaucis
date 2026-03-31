@@ -1,5 +1,5 @@
 {
-  "round": 1,
+  "round": 6,
   "config": {
     "top_k": 2,
     "max_active_lineages": 4
@@ -8,20 +8,20 @@
     {
       "id": "L1",
       "parent": null,
-      "best_speedup": 0.876,
-      "best_kernel": "iteration_1/variants/mxu_vpu_overlap/kernel.py",
-      "direction": "mxu_vpu_overlap",
-      "history": ["iter-1-mxu_vpu_overlap"],
-      "stagnant_rounds": 0
+      "best_speedup": 7.639,
+      "best_kernel": "iteration_5/variants/L1_fold_dh_fuse_fwd/kernel.py",
+      "direction": "fold_dh_fuse_fwd",
+      "history": ["iter-1-mxu_vpu_overlap", "iter-2-reduce_inputs", "iter-3-combined_fuse_skip", "iter-4-reduce_exp", "iter-5-fold_dh_fuse_fwd", "iter-6-bwd_grid_kv"],
+      "stagnant_rounds": 1
     },
     {
       "id": "L2",
       "parent": null,
-      "best_speedup": 0.825,
-      "best_kernel": "iteration_1/variants/mxu_utilization/kernel.py",
-      "direction": "mxu_utilization",
-      "history": ["iter-1-mxu_utilization"],
-      "stagnant_rounds": 0
+      "best_speedup": 7.845,
+      "best_kernel": "iteration_5/variants/L2_fuse_fwd_combined/kernel.py",
+      "direction": "fuse_fwd_combined",
+      "history": ["iter-1-mxu_utilization", "iter-2-v_tiling", "iter-3-reduce_inputs", "iter-4-fold_dh_pallas", "iter-5-fuse_fwd_combined", "iter-6-fori_v_bwd"],
+      "stagnant_rounds": 1
     }
   ],
   "pruned": [

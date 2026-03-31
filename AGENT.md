@@ -180,7 +180,7 @@
 - **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0. Same VLIW/MXU as SO9.
 - **Rule**: For forward gmm with fp8 inputs, TK can exceed tile_size=128 without issues. Maximize TK up to the minimum K dimension across shapes (512 for this kernel).
 
-### SO11: Uniform TM=256 + bwd_gmm TK=512 compound effect (2.460x speedup)
+### SO11-gmm: Uniform TM=256 + bwd_gmm TK=512 compound effect (2.460x speedup)
 - **What**: Use TM=256 for BOTH fwd and bwd_gmm (per-group M alignment), plus TK=512 for bwd_gmm. Tiling: (256, 256, 128, 256, 512, 128, 2048, 512, 128).
 - **Why**: TM=256 matching per-group M (M=8192/G=32=256) creates exactly 1 sub-tile row, producing the simplest inner loop. TK=512 halves K-loop iterations for bwd_gmm. The combination compounds: TM=256 creates clean sub-tiles that TK=512 can efficiently iterate over. TM=1024 + TK=512 (L1_bwd_tk512) actually regressed because 1024/256=4 sub-tile rows × 4 K iterations creates complex loop nesting.
 - **Impact**: 2.460x speedup (4.182ms). +5.4% over SO10 (2.335x). New overall best.
@@ -188,98 +188,98 @@
 - **Rule**: For bwd_gmm, TM=256 (per-group alignment) enables TK=512 benefits. TM=1024+TK=512 does NOT help. Always pair per-group TM with larger TK.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
 
-### [FP12] Forward out_dtype=bfloat16 causes correctness failure
+### [FP12-gmm] Forward out_dtype=bfloat16 causes correctness failure
 - **Symptom**: Setting `out_dtype=jnp.bfloat16` in forward `tokamax_backend.gmm()` produces max_diff=2065.6875 (atol=1.0)
 - **Root cause**: bf16 accumulation truncates partial products during K-reduction. For K=2048, the sum of 2048 fp8×fp8 products loses significant precision at bf16. The reference uses f32 accumulation.
 - **Fix**: Forward `out_dtype` MUST remain `jnp.float32`. Do NOT use bf16 accumulation for forward pass.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
 
-### [FP13] tgmm TM=4096 causes VLIW complexity bloat without speedup
+### [FP13-gmm] tgmm TM=4096 causes VLIW complexity bloat without speedup
 - **Symptom**: tgmm TM=4096 doubles VLIW bundles (47,683 vs 23,462) and MXU ops (3,584 vs 1,792) but regresses speedup from 2.335x to 2.277x (-2.5%).
 - **Root cause**: TM=4096 tiles are too large for efficient compilation. The compiler generates 2x more code per tile without reducing total grid iterations proportionally. Accumulators of 4096×128×4B=2MB per tile likely cause internal compiler complexity.
-- **Fix**: tgmm TM=1024 is optimal (see SO14). TM=2048 works but is suboptimal. TM=4096 is counterproductive.
+- **Fix**: tgmm TM=1024 is optimal (see SO14-gmm). TM=2048 works but is suboptimal. TM=4096 is counterproductive.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
-- **Updated**: 2026-03-31, round 6 — TM=1024 proved superior to TM=2048 (SO14)
+- **Updated**: 2026-03-31, round 6 — TM=1024 proved superior to TM=2048 (SO14-gmm)
 
-### [FP14] bwd_gmm TK=512 regresses with TM=1024 but improves with TM=256
+### [FP14-gmm] bwd_gmm TK=512 regresses with TM=1024 but improves with TM=256
 - **Symptom**: bwd_gmm (1024, 512, 128) regresses to 2.307x from 2.335x (-1.2%). But bwd_gmm (256, 512, 128) improves to 2.460x (+5.4%).
 - **Root cause**: TM=1024 creates 1024/256=4 sub-tile rows, and TK=512 creates 512/128=4 K-iterations. The 4×4 inner loop structure generates 24,673 VLIW bundles (+5.2% over 23,462). TM=256 creates 1 sub-tile row × 4 K-iterations — much simpler loop structure.
 - **Fix**: When increasing TK, ensure TM is small enough to keep sub-tile count low. Per-group TM alignment (TM=256) is the prerequisite for TK enlargement.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 3
 
-### SO12: Optimal tiling — all TK=512, all TM=256 for gmm (2.651x speedup)
+### SO12-gmm: Optimal tiling — all TK=512, all TM=256 for gmm (2.651x speedup)
 - **What**: Cross-pollinate L1 (fwd TK=512) with L2 (bwd TM=256+TK=512). Tiling: (256, 512, 128, 256, 512, 128, 2048, 512, 128).
-- **Why**: All gmm phases use TM=256 (per-group M alignment) and TK=512 (halved K-loops). tgmm uses proven TM=2048, TK=512, TN=128. This is the culmination of SO9+SO10+SO11.
-- **Impact**: 2.651x speedup (3.898ms). +7.8% over SO11 (2.460x). New overall best.
+- **Why**: All gmm phases use TM=256 (per-group M alignment) and TK=512 (halved K-loops). tgmm uses proven TM=2048, TK=512, TN=128. This is the culmination of SO9+SO10+SO11-gmm.
+- **Impact**: 2.651x speedup (3.898ms). +7.8% over SO11-gmm (2.460x). New overall best.
 - **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0, compute_efficiency=18.34%, spills=156
 - **Rule**: For grouped matmul with per-group M=256: use TM=256 for ALL gmm phases (fwd + bwd), TK=512 for ALL phases, TN=128. tgmm: TM=2048, TK=512, TN=128.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 4
 
-### SO13: Forward TN=256 — N-grid halving (2.769x speedup)
+### SO13-gmm: Forward TN=256 — N-grid halving (2.769x speedup)
 - **What**: Increase forward TN from 128 to 256. Tiling: (256, 512, 256, 256, 512, 128, 2048, 512, 128).
 - **Why**: For Gate/Up (N=512), TN=256 halves N-grid from 4→2 tiles. For Down (N=2048), 16→8 tiles. Fewer grid iterations reduce kernel launch overhead. Same VLIW/MXU profile (23,462 bundles, 1,792 ops) but faster due to fewer grid iterations.
-- **Impact**: 2.769x speedup (~3.80ms). +4.5% over SO12 (2.651x). New overall best.
+- **Impact**: 2.769x speedup (~3.80ms). +4.5% over SO12-gmm (2.651x). New overall best.
 - **Profile**: VLIW 23,462, MXU 1,792, dual_ratio=1.0, compute_efficiency=19.25%, spills=156
 - **Rule**: Forward TN=256 is safe and beneficial for these shapes. N=512 gives exactly 2 tiles (perfect), N=2048 gives 8 tiles.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 5
 
-### [FP24] bf16 scale_dtype and tgmm TM=1024 are mutually exclusive optimizations
-- **Symptom**: Cross-pollinating SO14 (tgmm TM=1024) with SO15 (bf16 scales) regresses on BOTH lineages: L2_scale_bf16 (2.682x vs 2.847x, -5.8%), L1_tgmm_tm1024 (2.688x vs 2.819x, -4.6%). Spills decrease (156→81/84) but speedup decreases.
+### [FP24-gmm] bf16 scale_dtype and tgmm TM=1024 are mutually exclusive optimizations
+- **Symptom**: Cross-pollinating SO14-gmm (tgmm TM=1024) with SO15-gmm (bf16 scales) regresses on BOTH lineages: L2_scale_bf16 (2.682x vs 2.847x, -5.8%), L1_tgmm_tm1024 (2.688x vs 2.819x, -4.6%). Spills decrease (156→81/84) but speedup decreases.
 - **Root cause**: bf16 scale dtype changes the compilation path such that the VLIW simplification from tgmm TM=1024 is negated. The two optimizations each work by changing the compiler's scheduling decisions, and these scheduling changes conflict. Fewer spills does NOT guarantee better performance when the VLIW schedule quality degrades.
 - **Fix**: Do NOT combine bf16 scale_dtype with tgmm TM=1024. Keep them as separate lineage strategies. L2 uses f32 scales + TM=1024, L1 uses bf16 scales + TM=2048.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
 
-### [FP25] tgmm TM<1024 causes regression — TM=1024 is the sweet spot
+### [FP25-gmm] tgmm TM<1024 causes regression — TM=1024 is the sweet spot
 - **Symptom**: tgmm TM=512 (2.719x, 576 MXU, 231 spills) and TM=256 (2.276x, 576 MXU, 84 spills) both regress from TM=1024 (2.847x, 896 MXU, 156 spills).
 - **Root cause**: TM=512 and TM=256 reduce MXU ops to 576 (from 896 at TM=1024) because smaller tiles produce fewer matmul operations per tile. The VLIW simplification trend (23,462→12,951) does NOT continue below TM=1024 (12,360 for TM=512, 8,497 for TM=256) — the overhead of more grid iterations dominates. TM=256 for tgmm does NOT benefit from per-group alignment the way fwd/bwd does, because tgmm's computation structure is fundamentally different (weight gradient accumulation vs. activation multiplication).
-- **Fix**: tgmm TM MUST be 1024 for bf16 tgmm. The range [512, 4096] has been fully explored: TM=512 (-4.5%), TM=1024 (optimal), TM=2048 (-2.7%), TM=4096 (FP13, bloat).
+- **Fix**: tgmm TM MUST be 1024 for bf16 tgmm. The range [512, 4096] has been fully explored: TM=512 (-4.5%), TM=1024 (optimal), TM=2048 (-2.7%), TM=4096 (FP13-gmm, bloat).
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
 
-### [FP27] tgmm TM=1024 improvement is code-path specific (L2 only)
+### [FP27-gmm] tgmm TM=1024 improvement is code-path specific (L2 only)
 - **Symptom**: tgmm TM=1024 with f32 scales on L1 code path gives 2.241x — a massive regression from L1's 2.751x (TM=2048). The exact same tgmm TM=1024 on L2 gives 2.847x (+2.8% improvement).
 - **Root cause**: The XLA/Mosaic compiler makes different scheduling decisions based on the full kernel code, not just the tiling parameters. L1 and L2 have identical tiling but subtly different code structure (from their independent evolutionary paths). tgmm TM=1024 simplifies the VLIW schedule in a way that benefits L2's specific compilation but hurts L1's.
 - **Fix**: Do NOT assume tiling improvements are portable between code paths. Always test each optimization on each lineage independently. tgmm TM=1024 is L2-specific; L1 should stay at TM=2048.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 8
 
-### [FP26] bwd_gmm TN<128 causes correctness failure
+### [FP26-gmm] bwd_gmm TN<128 causes correctness failure
 - **Symptom**: bwd TN=64 (with _clamp_tiling min lowered to 64) returns INCORRECT status.
 - **Root cause**: tokamax's internal tiling logic assumes TN >= 128. Sub-128 N tiles break the matmul decomposition or scale application, producing incorrect results.
 - **Fix**: All tiling dimensions MUST be >= 128. Do NOT lower the _clamp_tiling minimum below 128.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 7
 
-### [FP22] Forward TK=1024 causes major regression
+### [FP22-gmm] Forward TK=1024 causes major regression
 - **Symptom**: fwd TK=1024 with TN=256 regresses from 2.751x to 2.498x (-9.2%), increases spills from 156 to 234.
 - **Root cause**: TK=1024 creates tiles that exceed the compiler's efficient scheduling range. For K=2048, TK=1024 means only 2 K-iterations — the loop body is too large (one iteration processes too much data) causing register pressure.
 - **Fix**: Forward TK must stay at 512. TK=1024 exceeds the optimal point.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
 
-### [FP23] Forward TN=512 regression — single-tile N inefficient
+### [FP23-gmm] Forward TN=512 regression — single-tile N inefficient
 - **Symptom**: fwd TN=512 for Gate/Up (N=512) regresses from 2.769x to 2.410x (-13.0%), 231 spills.
 - **Root cause**: TN=512 covers the entire N dimension for Gate/Up in a single tile, but the 256×512 tile output is too large for efficient register allocation. TN=256 (2 tiles) provides better scheduling granularity.
 - **Fix**: Forward TN must stay at 256. Do NOT set TN equal to N for any shape.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
 
-### [FP16b] bwd_gmm TN=256 causes catastrophic register spills
+### [FP16b-gmm] bwd_gmm TN=256 causes catastrophic register spills
 - **Symptom**: bwd_gmm TN=256 produces 9,447 register spills (60x increase from 156), regressing speedup from 2.651x to 2.295x (-13.4%).
 - **Root cause**: bwd_gmm with transpose_rhs=True creates intermediate tensors proportional to TN. TN=256 doubles the intermediate buffer size, overflowing register capacity. The compiler spills 9,447 vectors to VMEM.
 - **Fix**: bwd_gmm TN MUST stay at 128. Only forward gmm (transpose_rhs=False) benefits from TN=256.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 5
 
-### [FP15] tgmm TN=256 halves MXU ops — regression like FP2
+### [FP15-gmm] tgmm TN=256 halves MXU ops — regression like FP2
 - **Symptom**: tgmm TN=256 (vs TN=128) drops MXU ops from 1,792 to 1,024 (-43%), increases VLIW bundles from 23,462 to 24,465 (+4.3%), regresses speedup from 2.460x to 2.452x.
 - **Root cause**: Larger N tiles change the tgmm matmul decomposition, reducing the number of MXU operations per tile. Similar mechanism to FP2 (N>128 constraint) but for bf16 tgmm — even without fp8 scale issues, the larger N tiles produce suboptimal compilation.
 - **Fix**: tgmm TN MUST stay at 128 regardless of input precision (fp8 or bf16). This extends FP2 beyond fp8 constraints.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 4
 
-### SO14: tgmm TM=1024 — halved VLIW complexity (2.847x speedup)
+### SO14-gmm: tgmm TM=1024 — halved VLIW complexity (2.847x speedup)
 - **What**: Reduce tgmm TM from 2048 to 1024. Tiling: (256, 512, 256, 256, 512, 128, 1024, 512, 128).
-- **Why**: TM=1024 halves the tgmm tile work, producing dramatically simpler compiled code. VLIW bundles dropped from 23,462 to 12,951 (-44.8%), MXU ops halved from 1,792 to 896. Despite doing half the MXU ops per tile, the kernel is faster because the simpler VLIW schedule has better pipeline utilization. This is the opposite of FP13 (TM=4096 bloat) — the compiler efficiency sweet spot is at TM=1024.
-- **Impact**: 2.847x speedup (~3.61ms). +2.8% over SO13 (2.769x). New overall best.
+- **Why**: TM=1024 halves the tgmm tile work, producing dramatically simpler compiled code. VLIW bundles dropped from 23,462 to 12,951 (-44.8%), MXU ops halved from 1,792 to 896. Despite doing half the MXU ops per tile, the kernel is faster because the simpler VLIW schedule has better pipeline utilization. This is the opposite of FP13-gmm (TM=4096 bloat) — the compiler efficiency sweet spot is at TM=1024.
+- **Impact**: 2.847x speedup (~3.61ms). +2.8% over SO13-gmm (2.769x). New overall best.
 - **Profile**: VLIW 12,951, MXU 896, dual_ratio=1.0, compute_efficiency=19.80%, spills=156
 - **Rule**: For bf16 tgmm with G=32 groups: TM=1024 is optimal. Smaller tiles = simpler VLIW = faster execution, even with fewer MXU ops. This creates 8 tgmm tiles per group (M=8192 / TM=1024 = 8).
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
 
-### SO15: bf16 scale_dtype — register pressure elimination (2.819x speedup)
+### SO15-gmm: bf16 scale_dtype — register pressure elimination (2.819x speedup)
 - **What**: Use `scale_dtype=jnp.bfloat16` (instead of float32) for all FP8 quantization scale factors. Tiling unchanged: (256, 512, 256, 256, 512, 128, 2048, 512, 128).
 - **Why**: bf16 scale factors halve the register footprint of scale tensors. This reduces register spills from 156 to 9 (-94%). The compiler can keep more values in registers, improving VLIW scheduling quality. bf16 scales have sufficient precision for FP8 blockwise quantization.
 - **Impact**: 2.819x speedup (~3.65ms). +2.5% over L1's previous best (2.751x).
@@ -288,8 +288,109 @@
 - **Rule**: bf16 scale_dtype can eliminate register pressure when the kernel has significant spills. Test on each lineage's code path separately.
 - **First seen**: 2026-03-31, gmm_fp8_blockwise session 2, round 6
 
+### [FP22] jax.lax.dynamic_slice not supported in Pallas TPU lowering (Mosaic)
+- **Symptom**: `NotImplementedError: Unimplemented primitive in Pallas TPU lowering for tc: dynamic_slice`
+- **Root cause**: `jax.lax.dynamic_slice` is NOT implemented in Pallas TPU kernel lowering (Mosaic). The K-tiling approach used `dynamic_slice` to slice already-loaded arrays within the kernel body — this is not available on TPU.
+- **Fix**: Cannot use `dynamic_slice` in Pallas kernels. Use only static indexing with compile-time constants (e.g., `array[:, 0:64]` and `array[:, 64:128]`) or add dimensions to the grid/BlockSpec to tile at the pallas_call level. Note that static manual unrolling may not help register pressure (see FP23).
+- **First seen**: 2026-03-30, chunk_gla optimization round 2
+
+### [FP23] Manual loop unrolling in Pallas kernels increases register pressure
+- **Symptom**: Manually unrolling the V-dimension loop (V=128 → 2x64) caused VLIW bundles to increase 59% (8270 → 13140), register spills to triple (1.96M → 5.74M), and speedup to improve only marginally (0.825x → 0.872x).
+- **Root cause**: Manual unrolling gives the compiler visibility into both iterations simultaneously. The compiler hoists all intermediate arrays from both V-halves, keeping them live concurrently. This is the OPPOSITE of the intended effect — instead of reducing peak liveness, it doubles it.
+- **Fix**: Do NOT manually unroll loops in Pallas kernels to reduce register pressure. The compiler will hoist all iterations, increasing live values. To actually reduce liveness, use `jax.lax.fori_loop` (which hides iterations from the compiler) or add the tiled dimension to the pallas_call grid via BlockSpec.
+- **First seen**: 2026-03-30, chunk_gla optimization round 2
+
+### [FP24] BT (chunk block tile) < 64 critically underutilizes MXU on TPU v7x
+- **Symptom**: chunk_size=32 (BT=32) drops MXU runtime utilization to 12% (from 22.5% at BT=64). Near-zero register spills but doubled grid iterations. Speedup: 0.811x (worse than 0.885x baseline).
+- **Root cause**: With BT=32, matmul dimensions are [32,128]@[128,128]. The 32-wide dimension underutilizes the 128x128 MXU systolic array — only 1/4 of MXU rows are active per matmul. More grid iterations (128 vs 64 tiles) add launch overhead that exceeds the simpler-code benefit.
+- **Fix**: BT (chunk block tile) must be >= 64 for reasonable MXU utilization on TPU v7x. BT=32 is below the threshold for efficient MXU use.
+- **First seen**: 2026-03-30, chunk_gla optimization round 2
+
 ### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
 - **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
 - **Root cause**: tgmm with TK=512 generates 2x more matmul tiles, each doing a full K=512 reduction. TK=256 reduces the matmul work per tile by half. The extra VLIW bundles with TK=512 are dominated by MXU ops, which is beneficial.
 - **Fix**: tgmm TK MUST be 512 (not 256) for optimal performance. The K-dimension is the most impactful tiling parameter for tgmm.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise session 2, round 2
+
+### SO12: Forward A fusion — recompute A inside forward output kernel (1.461x speedup)
+- **What**: Recomputed the attention matrix A inside the forward output kernel `_chunk_gla_fwd_o_gk_pl` by adding k as an input and computing `b_A = (q * exp(g)) @ (k * exp(-g)).T * scale` inline. Eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call from forward. Removed A from residuals (backward already recomputes it via SO11).
+- **Why**: Same principle as SO11 (backward reduce_inputs): eliminating a separate pallas_call saves kernel launch overhead, DMA transfers, and HBM round-trips. The forward A kernel had its own compilation, launch, and data movement. The A tensor was also stored as a forward-to-backward residual — removing it saves additional HBM bandwidth.
+- **Impact**: 1.097x → 1.461x (+33.2%). Computation events decreased from 237 to 213 (-10.1%).
+- **Applicable when**: A forward pass computes an intermediate (like attention matrix A) in a separate pallas_call, and that intermediate can be cheaply recomputed inside another kernel that already has the required inputs.
+- **First seen**: 2026-03-30, chunk_gla optimization round 3
+
+### SO13: Skip dead output computation — removing discarded dg gradient (compounds with SO12)
+- **What**: Removed all dg (gate gradient) computation from the backward kernel. The caller discards dg (`dq, dk, dv, _ = ...`), making all dg work dead code: 1 MXU matmul (M_upper @ dg_raw, [BT,BT]@[BT,K]), VPU mask construction, dgk_inter accumulation, dg_ref output write.
+- **Why**: Pure dead-code elimination. The dg computation accounted for ~12.5% of VLIW bundles (9058 → 7930) and ~11% of MXU ops (5238 → 4656). Alone it only improved speedup +0.5% (1.097x → 1.102x), but **combined with SO12 it compounds**: 1.097x → 1.577x (+43.7%) vs SO12 alone at 1.461x (+33.2%). The compound effect is +7.9% on top of SO12.
+- **Impact**: Alone: +0.5%. Combined with SO12: +43.7% total. VLIW reduced 12.5%.
+- **Key insight**: **Intra-kernel simplification has minimal standalone impact but compounds with inter-kernel optimizations.** Reducing VLIW complexity allows the compiler to produce tighter schedules that benefit more from kernel launch reduction.
+- **Applicable when**: A Pallas kernel produces outputs that the caller discards. Check all output Refs.
+- **First seen**: 2026-03-30, chunk_gla optimization round 3
+
+### [FP25] Mixed bf16/f32 matmul inputs not supported in Mosaic; bf16 + Precision.HIGHEST also rejected
+- **Symptom**: `MosaicError: INTERNAL: Mosaic failed to compile TPU kernel: Bad lhs type` with MLIR op `tpu.matmul (vector<64x256xbf16>, vector<256x256xf32>, vector<64x256xf32>)` OR `tpu.matmul (vector<64x256xbf16>, vector<256x256xbf16>, vector<64x256xf32>)` when `precision=lax.Precision.HIGHEST` is set.
+- **Root cause**: Two distinct constraints: (1) Mosaic rejects mixed-precision matmul inputs (bf16 + f32). (2) Even with BOTH operands in bf16, Mosaic rejects the matmul when `precision=lax.Precision.HIGHEST` is specified. HIGHEST forces `contract_precision<fp32>` in MLIR, which is incompatible with bf16 input types.
+- **Fix**: Either (a) keep all matmul operands in float32 with HIGHEST precision, or (b) cast both operands to bf16 AND remove/lower the precision parameter to `lax.Precision.DEFAULT`. Cannot have bf16 inputs AND HIGHEST precision simultaneously.
+- **First seen**: 2026-03-30, chunk_gla optimization round 4
+- **Extended**: 2026-03-30, chunk_gla round 5 (L2_bf16_uniform confirmed bf16+HIGHEST constraint)
+
+### [FP26] PrefetchScalarGridSpec index_map must accept all non-scalar grid dimensions
+- **Symptom**: `TypeError: kqg_map() takes 3 positional arguments but 4 were given` when using `PrefetchScalarGridSpec` with grid `(B, H, 1, 1, NT)` and `num_scalar_prefetch=1`.
+- **Root cause**: With `PrefetchScalarGridSpec(num_scalar_prefetch=S, grid=G)`, the index_map functions receive `len(G) - S` arguments (the non-scalar grid dimensions). For grid `(B, H, 1, 1, NT)` with `num_scalar_prefetch=1`, maps need 4 args: `(b, h, ki, vi, t)` minus 1 scalar = 4 args. Defining maps with only `(b, h, t)` (skipping the constant-1 dims) causes argument count mismatch.
+- **Fix**: index_map functions must always accept `len(grid) - num_scalar_prefetch` arguments, even for grid dimensions that are 1. Include placeholder args for constant dimensions: `lambda b, h, _ki, _vi, t: ...`.
+- **First seen**: 2026-03-30, chunk_gla optimization round 4
+
+### [FP27] Replacing exp(-x) with reciprocal(exp(x)) is NOT faster on TPU v7x
+- **Symptom**: L1_reduce_exp variant regressed from 1.577x to 1.498x (-5.0%) by replacing `exp(-x)` with `1.0 / exp(x)` and `exp(a-b)` with `exp(a) / exp(b)`.
+- **Root cause**: TPU v7x has a dedicated hardware Exponential Unit (EUP) that handles exp() efficiently. Replacing exp() calls with ALU division operations trades cheap EUP cycles for more expensive VPU division instructions. The EUP utilization dropped as expected (2.10% → 1.37%), but ALU divisions added pipeline stalls that negated any benefit.
+- **Fix**: Do NOT try to reduce exp() calls by converting to reciprocal/division form. The hardware EUP handles exp() more efficiently than the ALU handles division. Keep exp(-x) as-is.
+- **First seen**: 2026-03-30, chunk_gla optimization round 4
+
+### SO14: lax.scan → pallas_call with "arbitrary" dimension_semantics (6.831x — MASSIVE breakthrough)
+- **Optimization**: Replaced `lax.scan` for backward dh state propagation (64 sequential iterations) with a single `pallas_call` using `dimension_semantics=("parallel","parallel","arbitrary","arbitrary","arbitrary")`. The time dimension is marked "arbitrary" (sequentially iterated), keeping the dh state in VMEM scratch between iterations. Input arrays are flipped before pallas_call (to implement reverse scan) and output flipped after.
+- **Impact**: 1.577x → 6.831x (+333%) on shape B=2, T=4096, H=16, K=128, V=128, chunk_size=64. Latency: 4884ms → 1122ms (-77%).
+- **Why it works**: `lax.scan` dispatches each of 64 iterations as a SEPARATE XLA computation with full host→device communication, kernel scheduling, and HBM allocation for intermediates. Each scan iteration cost ~59ms of dispatch overhead — far more than the actual computation. `pallas_call` with "arbitrary" dims compiles ALL 64 iterations into a single on-chip kernel loop with no per-iteration dispatch. The Pallas kernels themselves are IDENTICAL (same VLIW bundles, MXU ops, register spills, DMA) — only the dispatch mechanism changed.
+- **Critical evidence**: Computation events dropped only 4.3% (207 → 198), yet latency dropped 77%. This breaks the previous "10% event reduction → 25-35% speedup" correlation because lax.scan events are VASTLY more expensive per event than pallas_call grid tile events.
+- **Applicable when**: ANY `lax.scan` or `jax.lax.scan` with sequential state dependency (h[t] = f(h[t-1], x[t])) in a Pallas program. Replace with a `pallas_call` where the time dimension uses "arbitrary" semantics and state is kept in VMEM scratch. This is the single most impactful optimization pattern discovered.
+- **First seen**: 2026-03-30, chunk_gla optimization round 4
+
+### SO15: Forward kernel fusion — merge chunk_fwd_h + chunk_gla_fwd_o_gk into single pallas_call (7.845x)
+- **Optimization**: Merged the two forward pallas_calls (chunk_fwd_h for inter-chunk state propagation, chunk_gla_fwd_o_gk for output combination) into a single `_chunk_fwd_combined_kernel` with grid (B, H, K/BK, V/BV, NT). Time dimension uses "arbitrary" semantics. VMEM scratch holds h state [BK, BV] between time steps. At each step: save h → compute output (recompute A inline) → update h.
+- **Impact**: 6.831x → 7.845x (+14.8%). Computation events: 198 → 177 (-10.6%). The 10.6% event reduction produced 14.8% speedup, consistent with the "10% event reduction → ~25% speedup" ratio for pallas_call grid tile events.
+- **Why it works**: Eliminates one pallas_call kernel launch, the h tensor HBM write-then-read cycle between the two forward kernels, and 21 computation events. The h state stays in VMEM scratch instead of round-tripping through HBM.
+- **Applicable when**: Forward pass has two sequential pallas_calls where one produces state consumed by the next. The "arbitrary" dimension semantics on the time dimension enables sequential state propagation within a single kernel.
+- **Relationship**: Extends SO14 (lax.scan→pallas_call) and SO12 (forward A fusion). The forward is now a single pallas_call with A recomputed inline and h state in scratch.
+- **First seen**: 2026-03-30, chunk_gla optimization round 5
+
+### [FP28] BT=128 (chunk_size doubling) counterproductive for chunk_gla — VLIW bloat exceeds tile reduction benefit
+- **Symptom**: BT=128 regressed to 5.395x (-21.0% from 6.831x at BT=64). Despite halving grid iterations (NT=64→32) and improving MXU util (33.2%→45.9%), overall latency increased 26% (1122ms→1412ms).
+- **Root cause**: Per-tile VLIW complexity increased +44% (7930→11449 bundles), MXU ops increased +33% (4656→6192), and register spills increased +6.1% (2.50M→2.65M). The [128,128] attention matrix is 4x larger than [64,64], creating substantial register pressure. Computation events stayed at 198 despite halving NT — the overhead per tile grew to consume the iteration savings.
+- **Fix**: BT=64 is the optimal chunk size for chunk_gla on shape B=2, T=4096, H=16, K=128, V=128. Do NOT increase BT beyond 64. The per-tile VLIW complexity growth exceeds the benefit of fewer tiles.
+- **Extends**: FP24 (BT<64 underutilizes MXU). Together: BT must be exactly 64 for this kernel.
+- **First seen**: 2026-03-30, chunk_gla optimization round 5
+
+### [FP29] Staged backward output writes reduce register spills but can regress MXU utilization
+- **Symptom**: Staged output writes (write dv → dq → dk sequentially, deferring exp computations) reduced register spills 9.8% (2.50M→2.25M) and Vector Store util 30.7% (9.81%→6.80%), but MXU runtime util dropped 24.0% (33.20%→25.23%). Net speedup improvement was marginal (+1.8%, 6.831x→6.957x).
+- **Root cause**: The staged writes introduce dependency barriers between output write groups. While these barriers help the register allocator (arrays become dead earlier), they also prevent the compiler from overlapping MXU operations across the barriers. The serialization between dv/dq/dk phases creates pipeline bubbles.
+- **Fix**: Do NOT use explicit staging barriers in Pallas backward kernels to reduce register pressure. The MXU scheduling regression typically negates the spill reduction benefit. Better approaches: reduce total work (fewer intermediates) or fuse kernels (fewer pallas_calls).
+- **First seen**: 2026-03-30, chunk_gla optimization round 5
+
+### [FP30] fori_loop + lax.cond inside Pallas kernels INCREASES register pressure
+- **Symptom**: Using `jax.lax.fori_loop(0, 2, body)` with `lax.cond` to split backward fused kernel into 2 sequential passes increased register spills +66% (2.5M → 4.15M), fills +83% (3.0M → 5.6M), and dropped MXU util from 33.2% to 13.5%. Speedup regressed from 7.845x to 7.731x.
+- **Root cause**: The fori_loop carry tuple materializes all shared arrays in VMEM at loop boundaries. The `lax.cond` branches add conditional control flow that the compiler must handle conservatively, keeping both branches' intermediates potentially live. The carry + cond overhead exceeds any benefit from hiding iterations.
+- **Fix**: Do NOT use `jax.lax.fori_loop` with `lax.cond` inside Pallas TPU kernels to reduce register pressure. The FP23 advice about fori_loop hiding iterations applies to simple loops, not to loops with conditional branches. For register pressure reduction, prefer: kernel fusion (eliminate pallas_calls), reducing total intermediate count, or adding grid dimensions via BlockSpec.
+- **First seen**: 2026-03-31, chunk_gla optimization round 6
+
+### [FP31] Precision.DEFAULT causes correctness failure for chunk_gla (max_diff=23.91)
+- **Symptom**: Changing all `precision=lax.Precision.HIGHEST` to `lax.Precision.DEFAULT` produces max_diff=23.91 (atol=10.0).
+- **Root cause**: DEFAULT precision allows bf16 intermediate accumulation. With BT=64 and K=128, matmul sums of 8192 products at bf16 lose significant precision. Errors accumulate across 64 chunks and the loss sum, exceeding the relaxed atol=10.0 threshold.
+- **Fix**: chunk_gla REQUIRES `Precision.HIGHEST` for correctness. Do NOT reduce precision. This closes off precision reduction as an optimization direction for this kernel.
+- **First seen**: 2026-03-31, chunk_gla optimization round 6
+
+### SO11: Eliminating separate pallas_call via input recomputation (1.097x speedup — first to beat reference)
+- **What**: Removed the `a_ref` input from the fused backward kernel and eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call that computed the A matrix. Instead, recompute A inside the backward kernel as `b_a = dot(q_pos, k_neg.T) * scale` using already-available q and k tiles.
+- **Why**: The separate pallas_call for A computation had its own compilation, launch overhead, DMA transfers (A tiles from HBM), and register allocation. By recomputing A inside the backward kernel (just 1 extra dot product), all of that overhead is eliminated: 27 fewer computation events (-10%), 2 fewer DMA transfers (-8%), and no HBM round-trip for A.
+- **Impact**: 0.876x → 1.097x (+25.2%). First variant to beat the JAX reference. Despite register spills INCREASING 24% (1.96M → 2.44M), the kernel launch overhead savings dominate.
+- **Key insight**: **Kernel launch overhead > register pressure** for multi-kernel Pallas programs. Eliminating a separate pallas_call is more impactful than reducing register spills within the fused kernel.
+- **Applicable when**: A Pallas program uses multiple pallas_call invocations and one kernel's output can be cheaply recomputed from inputs already available in another kernel.
+- **First seen**: 2026-03-30, chunk_gla optimization round 2

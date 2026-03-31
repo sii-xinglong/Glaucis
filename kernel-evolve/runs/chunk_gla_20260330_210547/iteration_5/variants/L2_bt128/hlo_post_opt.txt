@@ -1,0 +1,49 @@
+HloModule jit_wrapped, is_scheduled=true, entry_computation_layout={(f32[16,64,128,128]{3,2,1,0:T(8,128)}, f32[16,64,128,128]{3,2,1,0:T(8,128)}, f32[16,64,128,128]{3,2,1,0:T(8,128)}, f32[16,64,128,128]{3,2,1,0:T(8,128)}, f32[16,64,128,128]{3,2,1,0:T(8,128)})->f32[16,64,128,128]{3,2,1,0:T(8,128)}}, allow_spmd_sharding_propagation_to_parameters={true,true,true,true,true}, allow_spmd_sharding_propagation_to_output={true}
+
+FileNames
+1 "/workspace/kernel-evolve/docker/evaluate.py"
+2 "<string>"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "stage_performance"
+4 "optimized_compute"
+5 "optimized_compute.<locals>.loss_fn"
+6 "chunk_gla"
+7 "chunk_gla.<locals>._fwd"
+8 "chunk_gla_fwd"
+9 "chunk_gla_fwd_o_gk"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=870 end_line=870 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=749 end_line=749 column=16 end_column=79}
+3 {file_name_id=1 function_name_id=3 line=120 end_line=120 column=12 end_column=30}
+4 {file_name_id=2 function_name_id=4 line=718 end_line=718 column=14 end_column=73}
+5 {file_name_id=2 function_name_id=5 line=715 end_line=716 column=15 end_column=74}
+6 {file_name_id=2 function_name_id=6 line=685 end_line=685 column=11 end_column=28}
+7 {file_name_id=2 function_name_id=7 line=670 end_line=670 column=25 end_column=75}
+8 {file_name_id=2 function_name_id=8 line=317 end_line=317 column=8 end_column=58}
+9 {file_name_id=2 function_name_id=9 line=279 end_line=286 column=8 end_column=25}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=7}
+8 {file_location_id=8 parent_frame_id=8}
+9 {file_location_id=9 parent_frame_id=9}
+
+
+ENTRY %main.1 (args_0_.1: f32[16,64,128,128], args_1_.1: f32[16,64,128,128], args_2_.1: f32[16,64,128,128], args_3_.1: f32[16,64,128,128], args_4_.1: f32[16,64,128,128]) -> f32[16,64,128,128] {
+  %args_4_.1 = f32[16,64,128,128]{3,2,1,0:T(8,128)} parameter(4), metadata={op_name="args[4]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %args_3_.1 = f32[16,64,128,128]{3,2,1,0:T(8,128)} parameter(3), metadata={op_name="args[3]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %args_2_.1 = f32[16,64,128,128]{3,2,1,0:T(8,128)} parameter(2), metadata={op_name="args[2]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %args_1_.1 = f32[16,64,128,128]{3,2,1,0:T(8,128)} parameter(1), metadata={op_name="args[1]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %args_0_.1 = f32[16,64,128,128]{3,2,1,0:T(8,128)} parameter(0), metadata={op_name="args[0]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  ROOT %tpu_custom_call.1 = f32[16,64,128,128]{3,2,1,0:T(8,128)} custom-call(%args_0_.1, %args_1_.1, %args_2_.1, %args_3_.1, %args_4_.1), custom_call_target="tpu_custom_call", operand_layout_constraints={f32[16,64,128,128]{3,2,1,0}, f32[16,64,128,128]{3,2,1,0}, f32[16,64,128,128]{3,2,1,0}, f32[16,64,128,128]{3,2,1,0}, f32[16,64,128,128]{3,2,1,0}}, frontend_attributes={kernel_metadata={}}, metadata={op_name="jit(wrapped)/pallas_call" stack_frame_id=9}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"33554432"}],"custom_call_config":{"body":"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cl9zdG9yZQBfY2h1bmtfZ2xhX2Z3ZF9vX2drX3BsADxzdHJpbmc+AGZ1bmN0aW9uX3R5cGUAc3ltX25hbWUAdHJhbnNmb3JtX2luZGljZXMAd2luZG93X2JvdW5kcwB2YWx1ZQBnZXQ6AGdldABtdWw6AG11bABkb3RfZ2VuZXJhbDoAZG90X2dlbmVyYWwAYnJvYWRjYXN0X2luX2RpbToAYnJvYWRjYXN0X2luX2RpbQB0cmFuc2Zvcm1fMAB0cmFuc2Zvcm1fMQB0cmFuc2Zvcm1fMgB0cmFuc2Zvcm1fMwB0cmFuc2Zvcm1fNAB0cmFuc2Zvcm1fNQBleHA6AGV4cABpb3RhOgBpb3RhAHNxdWVlemU6AHNxdWVlemUAYWRkAHN0YWJsZV9tb3NhaWMudmVyc2lvbgBkaW1lbnNpb25fc2VtYW50aWNzAGl0ZXJhdGlvbl9ib3VuZHMAc2NhbGFyX3ByZWZldGNoAHNjcmF0Y2hfb3BlcmFuZHMAdHB1LmNvcmVfdHlwZQB3aW5kb3dfcGFyYW1zAGZhc3RtYXRoAG5lZzoAbmVnAHBlcm11dGF0aW9uAHRyYW5zcG9zZToAdHJhbnNwb3NlAGRpbWVuc2lvbl9udW1iZXJzAHByZWNpc2lvbgB0cmFuc3Bvc2VfbGhzAHRyYW5zcG9zZV9yaHMAZGltZW5zaW9ucwBnZToAZ2UAcHJlZGljYXRlAGppdDoAaml0AHNlbGVjdF9uOgBzZWxlY3RfbgBhZGQ6AHN3YXA6AHN3YXAAb3BlcmFuZFNlZ21lbnRTaXplcwBzdHJpZGVzAA==","needs_layout_passes":true,"allow_input_fusion":[],"serialization_format":"1","output_memory_colors":[],"output_memory_space_colors":[],"input_memory_space_colors":[],"disable_bounds_checks":true},"used_scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"1056768"}],"retry_config":{"retry_count":"0"},"aliasing_operands":{"lists":[]}}
+}
+

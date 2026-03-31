@@ -1,0 +1,47 @@
+HloModule jit_wrapped, is_scheduled=true, entry_computation_layout={(f32[2,16,4096,128]{3,2,1,0:T(8,128)}, f32[2,16,4096,128]{3,2,1,0:T(8,128)}, f32[16]{0:T(128)})->f32[2,64,16,128,128]{4,3,2,1,0:T(8,128)}}, allow_spmd_sharding_propagation_to_parameters={true,true,true}, allow_spmd_sharding_propagation_to_output={true}
+
+FileNames
+1 "/workspace/kernel-evolve/docker/evaluate.py"
+2 "<string>"
+
+FunctionNames
+1 "<module>"
+2 "main"
+3 "stage_performance"
+4 "optimized_compute"
+5 "optimized_compute.<locals>.loss_fn"
+6 "chunk_gla"
+7 "chunk_gla.<locals>._fwd"
+8 "chunk_gla_fwd"
+9 "chunk_fwd_h"
+
+FileLocations
+1 {file_name_id=1 function_name_id=1 line=870 end_line=870 column=4 end_column=10}
+2 {file_name_id=1 function_name_id=2 line=749 end_line=749 column=16 end_column=79}
+3 {file_name_id=1 function_name_id=3 line=120 end_line=120 column=12 end_column=30}
+4 {file_name_id=2 function_name_id=4 line=563 end_line=563 column=14 end_column=73}
+5 {file_name_id=2 function_name_id=5 line=560 end_line=561 column=15 end_column=74}
+6 {file_name_id=2 function_name_id=6 line=542 end_line=542 column=11 end_column=28}
+7 {file_name_id=2 function_name_id=7 line=528 end_line=528 column=28 end_column=78}
+8 {file_name_id=2 function_name_id=8 line=288 end_line=288 column=8 end_column=37}
+9 {file_name_id=2 function_name_id=9 line=111 end_line=136 column=16 end_column=30}
+
+StackFrames
+1 {file_location_id=1 parent_frame_id=1}
+2 {file_location_id=2 parent_frame_id=2}
+3 {file_location_id=3 parent_frame_id=3}
+4 {file_location_id=4 parent_frame_id=4}
+5 {file_location_id=5 parent_frame_id=5}
+6 {file_location_id=6 parent_frame_id=6}
+7 {file_location_id=7 parent_frame_id=7}
+8 {file_location_id=8 parent_frame_id=8}
+9 {file_location_id=9 parent_frame_id=9}
+
+
+ENTRY %main.1 (args_0_.1: f32[2,16,4096,128], args_1_.1: f32[2,16,4096,128], args_3_.1: f32[16]) -> f32[2,64,16,128,128] {
+  %args_3_.1 = f32[16]{0:T(128)} parameter(2), metadata={op_name="args[3]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %args_1_.1 = f32[2,16,4096,128]{3,2,1,0:T(8,128)} parameter(1), metadata={op_name="args[1]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  %args_0_.1 = f32[2,16,4096,128]{3,2,1,0:T(8,128)} parameter(0), metadata={op_name="args[0]"}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"0"}],"used_scoped_memory_configs":[]}
+  ROOT %tpu_custom_call.1 = f32[2,64,16,128,128]{4,3,2,1,0:T(8,128)} custom-call(%args_0_.1, %args_1_.1, %args_3_.1), custom_call_target="tpu_custom_call", operand_layout_constraints={f32[2,16,4096,128]{3,2,1,0}, f32[2,16,4096,128]{3,2,1,0}, f32[16]{0}}, frontend_attributes={kernel_metadata={}}, metadata={op_name="jit(wrapped)/pallas_call" stack_frame_id=9}, backend_config={"flag_configs":[],"scoped_memory_configs":[{"memory_space":"1","offset":"0","size":"33554432"}],"custom_call_config":{"body":"TUzvUgFNTElSMjMuMC4wZ2l0AAFBCQEDBQcBAwkDLQsNDxETFRcZGx0fISMlJykrLS8xMzUDWgTKAy0B9wcLCxcTExsLCwsTEwsLFwsLCwsLCwsPExMTDxMTCycTDw8LkwsLCwsPDwsLCxMTFwsTCwsTExMTCxMTFwsLExcTCxMLD0sLHwvFZeWFC7MLCwsLGxsLGwsbCzMbC7MbGxsLGwsPDw8bEwsjDwsPCxsPCw8LEw8PDxsXCwUPkWGNYU0qAnkB3RMPGw8LCxcLExsTEw8bCxMLEw8TExsTExsnUxMTGxMTGxMTGxcfExMbDxsTExMbExsTExsPUwsXCxMbExMTExsTExMbExMbExMbGwtTFwsXCxMbFx8LFwsTH0MLCwsLExMTHxMTGxcPExMbExMbBwVZWQEtDwcHHw8XLx8XCxs3JysnNzMnNxsbHwIWGh8FNwU5AwMTUgIdKWICAwMTyQMDGgLGAwU7BT0FPx0PdgIdD4ICBUEFQx1CAkYCBUUFRwVJBUsFTQVPBVEREwAdKdoCHSmWAx0ptgMdVe0dD1YCHQ+uAgVTAwcjLWXeAmdpHQ8mAxEJAREJBQVVIwkJQQEAAAAAAAAAAQAAAAAAAABAAAAAAAAAAIAAAAAAAAAABVcFWQVbDSEdD8sdBd8FXQVfBWEdBRICHSUWAh0eAiICBWMdBT4CBWUFZyMBAQEdD44CHSWiAh0FsgIFaR07wgIdJc4CHeIC5gIFawVtHSUaAx1eA2IDHXmqAwVvAwOHiQVxEQktAxGNjxmRm52fQaFDGwWj/6WnBXMBC/v79/f3DR9hZmZpbmVfbWFwPChkMCwgZDEsIGQyLCBkMykgLT4gKGQwLCBkMSwgZDIsIGQzKT4AYWZmaW5lX21hcDwoZDApIC0+IChkMCk+AGFmZmluZV9tYXA8KGQwLCBkMSwgZDIsIGQzLCBkNCkgLT4gKGQwLCBkMSwgZDIsIGQzLCBkNCk+AGFmZmluZV9tYXA8KGQwLCBkMSkgLT4gKGQwLCBkMSk+AAV1IwkLUQIAAAAAAAAAEAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAQAAAAAAAAAAFdwV5BXsFfQEJqa2xtwMFH6shRwlFAwUfryFHCUkDBR+zIbUJSyMJAxEQAAAAAAAAAAMFH7khuwlNIwkLUQEAAAAAAAAAQAAAAAAAAAABAAAAAAAAAIAAAAAAAAAAgAAAAAAAAAADBRlPG0UDBRlPG0kDBRnDG0sNIwMFGccbTQ0lEQEBHRHNHQXPLQMHfxUtAwPT1QV/IwEDCQEAAAAd2dsFgR3dUwWDLQMHf11/HePlBYUd51MFhwMDE+sRAQUdI+8dBfEtAwd/XYcDA/XCAwWJI3RwdS5kaW1lbnNpb25fc2VtYW50aWNzPGFyYml0cmFyeT4AI3RwdS5tZW1vcnlfc3BhY2U8dm1lbT4AI3RwdS5kaW1lbnNpb25fc2VtYW50aWNzPHBhcmFsbGVsPgAjdHB1Lm1lbW9yeV9zcGFjZTxzbWVtPgAjdHB1LmNvcmVfdHlwZTx0Yz4AI3RwdS5kb3RfZGltZW5zaW9uX251bWJlcnM8WzFdLCBbMF0sIFswXSwgWzFdLCBbMCwgMCwgMSwgMV0sIFtdLCBbXT4AI3RwdS5jb250cmFjdF9wcmVjaXNpb248ZnAzMj4AHVcOAh1ZWy0DB38ViR0nWwWLBY0dJgIqAgWPHQUuAi0DB4MbKwMDYUEdVzoCHVljLQMHgwstBZEdSgJjBZMDA2FDEQMBHRFaAh0FXgItAweRL08dK2YCHQVqAi0DB5EJKQMHIy1lcgJnaSMBCSEBAAAAAQAAAAUAAAAAAAAAHRF6Ah0FfgItAweVGzEdEYYCHQWKAi0DB5cbMR0RkgIdBZYCLQMHmx83AwMTngITBRAAAKAQHSemAh0FqgItAwebH0EdEW8tAwedCSkdcboCHTu+AhVzxgItAwdVF1MdBcoCLQMHnTFLHSfSAh0F1gItAwedCUsdK28jAQkhAQAAAAEAAAACAAAAAAAAAAWVHeoC7gIFlx0F8gItAwefN1MdcfoCHTv+AhVzAgMdBQYDLQMHny9VHXkOAx17EgMdBRYDLQMHny9nHSceAx0FIgMtAwefHWcdESoDHQUuAy0DB6MvTwMDNgM6AwWZIwkFIQEAAAAAAAAAAAAAAAAAAAAdQgNGAwWbHUoDTgMFnR0FUgMtAwelEUkDAxNaAyUHCQAAAAAFnx1mA2oDBaEdBW4DLQMJo1WtCwMJdgMCAnoDBgJ+Ay2CAy0FowWlBacFqR1VigMdI44DHQWSAy0DCaMvrQsdK5oDHQWeAy0DB6MJKQMDE6YDEwUBHXuuAx2DsgMtAweNQY0dK7oDHYO+Ay0DB40ZOyNhcml0aC5vdmVyZmxvdzxub25lPgAjYXJpdGguZmFzdG1hdGg8bm9uZT4AAQICAwsnBQIEAgQFAQIEJwMCAgUX+QkFBQICAgQFkycFAgICBAUnAwICAQEJF/0DQQWVF/kLBQICBQIEAgQFlxf5BQIEAgQFmScLBQUFAgQCBAUnCQUFAgICBAUFFQEBAQEBDQ0VFxkBBQsBAQEBAQkBAQEBBQsBAQEBAQMBBQsBAQEBAQsBAQEBAScFBQICAScFAgIFBScFAgQCAgUEMgwFAREBhQcDARULEQGLBwObRgIVAQEBAQEBAQEBAQ0BDQEVARcBGQETBlEDAwMDFQZRAwUFDxUdA9fRAycHBuEDEQMZAwM16QMBCQY1AxEDHR8HNfMDEQUbHyEGCgIDCwMhCQZdAwsDFw8HXQ0DCwUlIwMDXwsDARcHXzICAxMFCSkjBjYCAwEDKwMDHQsDARcHHU4CAxMFLS8lFB0DMQkDCx0DA4GiAwMFCQaBAwcDmwMDMwcDAwMDMwcDAwUGMwMHBxOfoREFMz0JnROfoRsAHQMBBRsAHQMDNwcDAwMDNwcDAwUGNwMHBxMzNQMDCQcDAxMGCQMDAwkDAwkHAwMDAwkHAwMDAwkHAwMFBgkDGw0ROTs9P0EHBgkDBwNDBwYJAxsDNxEFCW4CD0cROTs9P0EDAxUHAwMDAxUHAwMDAxUHAwMDAxUHAwMFBhUDHQsLSUtNTwcGFQMPA1EDAxcHAwMDAxcHAwMDAxcHAwMDAxcHAwMFBhcDHQsNVVdZWwcGFwMPA10TBmsDAwMDFQZrAwUFD2EDA22aAgMFDwdtDQMFBWNlAwM5BwMDAwM5BwMDBQY5AwcHE2lrGQe2Ag0DBQNnCQZ1AwcDbw8HdQ0DBwVtcQMDLwcDAwMDLwcDAwUGLwMHBxN1dxEFLz0JcxN1dwkGdwMLA2cnB3cNAwsFeycZB/YCDQMLA30HBgoDAykDfwkGfQMPA4EPB30NAw8FX4MDAz8HAwMDAz8HAwMFBj8DBwcTh4kpBz4DMgMDKwNTAwN/VgMDBysHf3IDAwcHjYWPLQeGAw0DBwWLkQMDMQcDAwMDMQcDAwUGMQMHBxOVlxEFMT0JkxOVlw0AAQsRAb0HAw0LCwEBAQEBAQEBAQEDAwELAwENBAEJAQMJBQsRAb8HAw0LCwEBAQEBAQEBAQEDAwELAwENBAEJAQMJBwsRAcEHAw8PCwEBAQEBAQEBAQEDAwELAwEDAwELAwENBAEDCwsRAcUHAw8PCwEBAQEBAQEBAQEDAwELAwEDAwELAwENBAELAQsDBQcGAwEFAQB2EKsdHRUlGRsVFxkJCwsNBwkTHRETCw0XHR0jISMpLUUjJQsRKRUrLQsZGRkZCQsNCQsJHSUTHQ0JCykTFxcdFw8ZGxcTFRMXGSMjFxkVIyUZHw8NCR0RYnVpbHRpbgBzdGFibGVfbW9zYWljAHRwdQBhcml0aABtb2R1bGUAYXJpdGguY29uc3RhbnQAdmVjdG9yLmxvYWQAdmVjdG9yLnNoYXBlX2Nhc3QAdmVjdG9yLmJyb2FkY2FzdABmdW5jLmZ1bmMAZnVuYy5yZXR1cm4AYXJpdGgubXVsZgB0cHUudmVjdG9yX3N0b3JlAGFyaXRoLmluZGV4X2Nhc3QAbWVtcmVmLmxvYWQAYXJpdGguY21waQBtYXRoLmV4cABzY2YueWllbGQAdHB1LmlvdGEAYXJpdGguYWRkaQBhcml0aC5zaXRvZnAAYXJpdGguZXh0dWkAc2NmLmlmAGFyaXRoLnN1YmYAdHB1LnRyYW5zcG9zZQB0cHUubWF0bXVsAGFyaXRoLmFkZGYAPHN0cmluZz4AX2NodW5rX2Z3ZF9oX2tlcm5lbABnZXQ6AGdldAB2YWx1ZQBmdW5jdGlvbl90eXBlAHN5bV9uYW1lAHRyYW5zZm9ybV9pbmRpY2VzAHdpbmRvd19ib3VuZHMAYWRkAG11bDoAbXVsAHN3YXA6AHN3YXAAZXhwAHRyYW5zZm9ybV8wAHRyYW5zZm9ybV8xAHRyYW5zZm9ybV8yAHRyYW5zZm9ybV8zAGFkZDoAY29udmVydF9lbGVtZW50X3R5cGU6AGNvbnZlcnRfZWxlbWVudF90eXBlAHByZWRpY2F0ZQBvcGVyYW5kU2VnbWVudFNpemVzAHN0cmlkZXMAZXhwOgBicm9hZGNhc3RfaW5fZGltOgBicm9hZGNhc3RfaW5fZGltAF9jaHVua19md2RfaF9rZXJuZWwuPGxvY2Fscz4uaW5pdABzdGFibGVfbW9zYWljLnZlcnNpb24AZGltZW5zaW9uX3NlbWFudGljcwBpdGVyYXRpb25fYm91bmRzAHNjYWxhcl9wcmVmZXRjaABzY3JhdGNoX29wZXJhbmRzAHRwdS5jb3JlX3R5cGUAd2luZG93X3BhcmFtcwBkaW1lbnNpb25zAGlvdGE6AGlvdGEAc3F1ZWV6ZToAc3F1ZWV6ZQBvdmVyZmxvd0ZsYWdzAGZhc3RtYXRoAGVxOgBlcQBjb25kOgBjb25kAHN1YjoAc3ViAHBlcm11dGF0aW9uAHRyYW5zcG9zZToAdHJhbnNwb3NlAGRvdF9nZW5lcmFsOgBkb3RfZ2VuZXJhbABkaW1lbnNpb25fbnVtYmVycwBwcmVjaXNpb24AdHJhbnNwb3NlX2xocwB0cmFuc3Bvc2VfcmhzAA==","needs_layout_passes":true,"allow_input_fusion":[],"serialization_format":"1","output_memory_colors":[],"output_memory_space_colors":[],"input_memory_space_colors":[],"disable_bounds_checks":true},"used_scoped_memory_configs":[]}
+}
+
