@@ -105,9 +105,54 @@ Kernel evaluation runs on TPU via GitHub Actions. The engine:
 
 The workflow template is at [`.github/workflows/kernel-eval.yaml`](.github/workflows/kernel-eval.yaml). The evaluation container is at [`docker/`](docker/).
 
-## Claude Code Skills
+## Claude Code Plugin
 
-The pallas-evolve skills are bundled as a local Claude Code plugin. When you open this repo in Claude Code for the first time, you'll be prompted to trust the plugin. After that, invoke skills with:
+The pallas-evolve skills are bundled as a Claude Code plugin at `plugins/pallas-evolve/`. There are two ways to install it:
+
+### Option A: Marketplace (recommended)
+
+If you have a local skills marketplace configured, add pallas-evolve to your global settings:
+
+```jsonc
+// ~/.claude/settings.json
+{
+  "enabledPlugins": {
+    "pallas-evolve@<your-marketplace-name>": true
+  },
+  "extraKnownMarketplaces": {
+    "<your-marketplace-name>": {
+      "source": {
+        "source": "directory",
+        "path": "/path/to/skills"  // must contain plugins/pallas-evolve/
+      }
+    }
+  }
+}
+```
+
+### Option B: Local plugin (repo-level)
+
+Register as a local plugin in `.claude/settings.json` at the repo root:
+
+```jsonc
+// .claude/settings.json
+{
+  "plugins": [
+    { "type": "local", "path": "./kernel-evolve/plugins/pallas-evolve" }
+  ],
+  "enabledPlugins": {
+    "pallas-evolve": true
+  }
+}
+```
+
+> **Note**: Local plugins declared in repo-level settings may not load correctly in git worktree sessions due to relative path resolution. If skills don't appear after `claude /doctor`, switch to the marketplace approach (Option A) which uses absolute paths and works reliably in all contexts.
+
+### Verifying installation
+
+Restart Claude Code, then check that pallas-evolve skills appear in the session. You should see `pallas-evolve:start`, `pallas-evolve:submit`, etc. in the available skills list. If they don't appear, run `/doctor` to diagnose.
+
+### Available skills
 
 ```
 /pallas-evolve:start <config.yaml>    # Start an optimization session
