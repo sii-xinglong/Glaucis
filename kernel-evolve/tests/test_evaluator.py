@@ -6,6 +6,7 @@ import json
 from kernel_evolve.evaluator import (
   BatchEvalRequest,
   BatchEvalResult,
+  BenchmarkData,
   EvalRequest,
   EvalResult,
   EvalStatus,
@@ -161,3 +162,85 @@ def test_batch_eval_result_best_returns_none_when_all_failed():
   batch = BatchEvalResult(results={"v1": r1, "v2": r2})
   assert batch.best() is None
   assert batch.ranked() == []
+
+
+def test_benchmark_data_basic():
+  bd = BenchmarkData(
+    lower_time_ms=100.0,
+    compile_time_ms=5000.0,
+    evaluation_times_ms=(1.1, 1.3, 1.2, 1.4, 1.0),
+    peak_memory_mb=128.5,
+  )
+  assert bd.median_ms == 1.2
+  assert bd.min_ms == 1.0
+  assert bd.max_ms == 1.4
+  assert bd.timing_source == "xprof_clustered"
+
+
+def test_benchmark_data_cv():
+  bd = BenchmarkData(
+    lower_time_ms=0.0,
+    compile_time_ms=0.0,
+    evaluation_times_ms=(2.0, 2.0, 2.0),
+    peak_memory_mb=None,
+  )
+  assert bd.cv == 0.0  # zero variance
+
+
+def test_benchmark_data_to_dict():
+  bd = BenchmarkData(
+    lower_time_ms=100.0,
+    compile_time_ms=5000.0,
+    evaluation_times_ms=(1.0, 2.0, 3.0),
+    peak_memory_mb=64.0,
+    timing_source="wallclock",
+  )
+  d = bd.to_dict()
+  assert d["lower_time_ms"] == 100.0
+  assert d["compile_time_ms"] == 5000.0
+  assert d["evaluation_times_ms"] == [1.0, 2.0, 3.0]
+  assert d["peak_memory_mb"] == 64.0
+  assert d["median_ms"] == 2.0
+  assert d["timing_source"] == "wallclock"
+
+
+def test_benchmark_data_from_dict():
+  d = {
+    "lower_time_ms": 50.0,
+    "compile_time_ms": 2000.0,
+    "evaluation_times_ms": [1.5, 1.6],
+    "peak_memory_mb": None,
+    "timing_source": "xprof_average",
+  }
+  bd = BenchmarkData.from_dict(d)
+  assert bd.lower_time_ms == 50.0
+  assert bd.evaluation_times_ms == (1.5, 1.6)
+  assert bd.peak_memory_mb is None
+  assert bd.timing_source == "xprof_average"
+
+
+def test_benchmark_data_roundtrip():
+  original = BenchmarkData(
+    lower_time_ms=200.0,
+    compile_time_ms=8000.0,
+    evaluation_times_ms=(0.5, 0.6, 0.7, 0.8, 0.9),
+    peak_memory_mb=256.0,
+    timing_source="xprof_clustered",
+  )
+  restored = BenchmarkData.from_dict(original.to_dict())
+  assert restored.lower_time_ms == original.lower_time_ms
+  assert restored.compile_time_ms == original.compile_time_ms
+  assert restored.evaluation_times_ms == original.evaluation_times_ms
+  assert restored.peak_memory_mb == original.peak_memory_mb
+  assert restored.timing_source == original.timing_source
+  assert restored.median_ms == original.median_ms
+
+
+def test_benchmark_data_from_dict_defaults():
+  """from_dict should handle missing keys gracefully."""
+  bd = BenchmarkData.from_dict({})
+  assert bd.lower_time_ms == 0.0
+  assert bd.compile_time_ms == 0.0
+  assert bd.evaluation_times_ms == ()
+  assert bd.peak_memory_mb is None
+  assert bd.timing_source == "xprof_clustered"
