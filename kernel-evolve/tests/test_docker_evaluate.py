@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 def _load_evaluate_module():
@@ -290,3 +290,147 @@ def test_extract_iteration_times_multi_event_iterations():
   # Each iteration spans from ts=0,dur=200 to ts=300+200=500 => 500us = 0.5ms
   assert abs(times[0] - 0.5) < 0.01
   assert abs(times[1] - 0.5) < 0.01
+
+
+def test_stage_benchmark_returns_benchmark_data(tmp_path):
+  """stage_benchmark should return BenchmarkData with timing and profile metrics."""
+  evaluate = _load_evaluate_module()
+
+  globals_dict = {"optimized_compute": lambda M=1: M}
+
+  # Mock jax.jit -> lower -> compile chain
+  mock_lowered = MagicMock()
+  mock_compiled = MagicMock()
+  mock_compiled.return_value = 42
+  mock_mem = MagicMock()
+  mock_mem.peak_memory_in_bytes = 128 * 1024 * 1024  # 128 MB
+  mock_compiled.memory_analysis.return_value = mock_mem
+  mock_lowered.compile.return_value = mock_compiled
+  mock_jitted = MagicMock()
+  mock_jitted.lower.return_value = mock_lowered
+
+  # Prepare xprof trace events that simulate 5 iterations
+  trace_events = []
+  for i in range(5):
+    trace_events.append({
+      "pid": 1, "ts": i * 10000, "dur": 500 + i * 10,
+      "name": "jit_computation.fn",
+    })
+  trace_events.append({"args": {"name": "/device:TPU:0"}, "pid": 1})
+  trace_events.append({
+    "pid": 1, "tid": 4294967295, "name": "MXU", "dur": 100,
+    "args": {"% util": "50.0"},
+  })
+
+  mock_xprof = MagicMock()
+  mock_xprof.xspace_to_tool_data.return_value = (
+    json.dumps({"traceEvents": trace_events}), None
+  )
+
+  # Create dummy .xplane.pb so os.walk finds it and proceeds to xprof parsing
+  (tmp_path / "trace.xplane.pb").write_bytes(b"")
+
+  # Patch module-level attributes on the loaded evaluate module
+  with patch.object(evaluate, "jax") as mock_jax, \
+       patch.object(evaluate, "raw_to_tool_data", mock_xprof):
+    mock_jax.jit.return_value = mock_jitted
+    mock_jax.profiler.ProfileOptions.return_value = MagicMock()
+
+    result = evaluate.stage_benchmark(
+      globals_dict,
+      shapes=[{"M": 4}],
+      trace_dir=str(tmp_path),
+    )
+
+  assert result["ok"] is True
+  assert "benchmark" in result
+  assert result["latency_ms"] > 0
+  assert result["benchmark"]["peak_memory_mb"] == 128.0
+  assert result["benchmark"]["timing_source"] == "xprof_clustered"
+  assert len(result["benchmark"]["evaluation_times_ms"]) == 5
+  assert "compute_ratio" in result
+  assert "hw_utilization" in result
+
+
+def test_stage_benchmark_wallclock_fallback(tmp_path):
+  """stage_benchmark should fall back to wallclock timing when xprof fails."""
+  evaluate = _load_evaluate_module()
+
+  globals_dict = {"optimized_compute": lambda M=1: M}
+
+  mock_lowered = MagicMock()
+  mock_compiled = MagicMock()
+  mock_compiled.return_value = 42
+  mock_compiled.memory_analysis.side_effect = Exception("no memory_analysis")
+  mock_lowered.compile.return_value = mock_compiled
+  mock_jitted = MagicMock()
+  mock_jitted.lower.return_value = mock_lowered
+
+  with patch.object(evaluate, "jax") as mock_jax, \
+       patch.object(evaluate, "raw_to_tool_data", None):
+    mock_jax.jit.return_value = mock_jitted
+    mock_jax.profiler.ProfileOptions.return_value = MagicMock()
+
+    result = evaluate.stage_benchmark(
+      globals_dict,
+      shapes=[{"M": 4}],
+      trace_dir=str(tmp_path),
+    )
+
+  assert result["ok"] is True
+  assert result["benchmark"]["timing_source"] == "wallclock"
+  assert result["benchmark"]["peak_memory_mb"] is None
+  assert result["latency_ms"] > 0
+
+
+def test_stage_benchmark_xprof_average_fallback(tmp_path):
+  """stage_benchmark should fall back to xprof_average when clustering fails."""
+  evaluate = _load_evaluate_module()
+
+  globals_dict = {"optimized_compute": lambda M=1: M}
+
+  mock_lowered = MagicMock()
+  mock_compiled = MagicMock()
+  mock_compiled.return_value = 42
+  mock_compiled.memory_analysis.side_effect = Exception("no memory")
+  mock_lowered.compile.return_value = mock_compiled
+  mock_jitted = MagicMock()
+  mock_jitted.lower.return_value = mock_lowered
+
+  # Events that can't be clustered into 5 groups (only 2 events, need 5 iters)
+  trace_events = [
+    {"pid": 1, "ts": 0, "dur": 2500, "name": "jit_computation.fn"},
+    {"pid": 1, "ts": 3000, "dur": 2500, "name": "jit_computation.fn"},
+    {"args": {"name": "/device:TPU:0"}, "pid": 1},
+  ]
+
+  mock_xprof = MagicMock()
+  mock_xprof.xspace_to_tool_data.return_value = (
+    json.dumps({"traceEvents": trace_events}), None
+  )
+
+  # Create dummy .xplane.pb so os.walk finds it
+  (tmp_path / "trace.xplane.pb").write_bytes(b"")
+
+  with patch.object(evaluate, "jax") as mock_jax, \
+       patch.object(evaluate, "raw_to_tool_data", mock_xprof):
+    mock_jax.jit.return_value = mock_jitted
+    mock_jax.profiler.ProfileOptions.return_value = MagicMock()
+
+    result = evaluate.stage_benchmark(
+      globals_dict,
+      shapes=[{"M": 4}],
+      trace_dir=str(tmp_path),
+      n_iters=5,
+    )
+
+  assert result["ok"] is True
+  assert result["benchmark"]["timing_source"] == "xprof_average"
+
+
+def test_stage_benchmark_no_compute_fn():
+  """stage_benchmark should return error when no compute function found."""
+  evaluate = _load_evaluate_module()
+  result = evaluate.stage_benchmark({}, shapes=[{"M": 4}])
+  assert result["ok"] is False
+  assert "No compute function" in result["error"]
