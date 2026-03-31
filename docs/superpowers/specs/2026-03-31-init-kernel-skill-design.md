@@ -5,7 +5,7 @@
 
 ## Overview
 
-A new skill within the `pallas-evolve` plugin that initializes a kernel optimization project from `primatrix/pallas-kernel`. Given a kernel name and branch, it clones the upstream repo, copies the reference kernel code, generates a template with EVOLVE-BLOCK markers, copies and adapts test cases, generates a YAML config, and verifies baseline correctness.
+A new skill within the `pallas-evolve` plugin that initializes a kernel optimization project from `primatrix/pallas-kernel`. Given a kernel name and branch, it clones the upstream repo, consolidates reference kernel code into self-contained files, generates a template with EVOLVE-BLOCK markers, copies and adapts test cases, generates a YAML config, and verifies baseline correctness.
 
 ## Motivation
 
@@ -55,7 +55,7 @@ primatrix/pallas-kernel/
 git clone --depth 1 --branch <branch> <repo_url> /tmp/pallas-kernel-<random>
 ```
 
-Record the HEAD commit SHA for traceability.
+Record the HEAD commit SHA for traceability. Cleanup of this temporary directory happens in Step 10 regardless of success or failure of subsequent steps.
 
 ### Step 2 — Discover and validate source files
 
@@ -64,30 +64,51 @@ Record the HEAD commit SHA for traceability.
 - Search for corresponding test files in `tests/` (patterns: `test_<kernel_name>*.py`, `tests/ops/<kernel_name>/`)
 - If kernel directory not found, report error with available kernel directories
 
-### Step 3 — Copy reference kernel
+### Step 2.5 — Analyze kernel structure
 
-- Copy the entire `tops/ops/<kernel_name>/` directory to `kernel-evolve/examples/kernels/<kernel_name>/`
-- Preserve all original filenames and structure — **no modifications** to the upstream code
-- Create entry file `kernel-evolve/examples/kernels/<kernel_name>_ref.py` that:
-  - Imports from the copied `<kernel_name>/` subdirectory
-  - Re-exports the compute function as `reference_fn` or `simple_compute` (matching evaluate.py's discovery convention)
-  - Exports `_make_test_data()` for test input generation
-  - Includes source traceability comment:
-    ```python
-    # Source: primatrix/pallas-kernel @ branch: <branch>
-    # Commit: <sha>
-    # Initialized: <date>
-    ```
+Before copying, analyze the upstream kernel code to understand:
+
+1. **Main compute function**: Identify the primary entry-point function (the function that takes shape parameters and returns outputs). Look for patterns like `def chunk_gla(...)`, `def forward(...)`, or the function called from tests.
+2. **`custom_vjp` usage**: Check if the kernel uses `jax.custom_vjp` for forward/backward split. This affects how the `optimized_compute` wrapper is structured.
+3. **External dependencies**: Identify any imports outside the standard library and JAX ecosystem (e.g., `qwix`, `tokamax`). If external dependencies are found:
+   - Record them for the YAML config (may need a custom K8s job template with pip installs)
+   - Warn the user about the dependencies
+4. **Function signature**: Determine how the upstream compute function takes its arguments and how to map this to the required `simple_compute(**shape_dict)` / `optimized_compute(**shape_dict)` pattern where evaluate.py passes shape parameters as keyword arguments.
+5. **Multi-file structure**: Determine which upstream files contain the kernel logic and how they import each other, since all code must be consolidated into a single self-contained file.
+
+If the upstream code is too complex for automated transformation (e.g., deeply nested external dependencies), generate a scaffold with `TODO` markers for manual completion and inform the user.
+
+### Step 3 — Generate reference kernel
+
+**Critical constraint**: evaluate.py loads kernel files via `exec(kernel_code, exec_globals)`, not Python module imports. All generated files must be fully self-contained — no relative imports, no adjacent subdirectory imports.
+
+Generate `kernel-evolve/examples/kernels/<kernel_name>_ref.py`:
+
+- **Consolidate** all upstream `tops/ops/<kernel_name>/*.py` files into a single self-contained file
+- Inline all cross-file imports within the upstream kernel package
+- Preserve the algorithm logic exactly — no functional changes
+- Export both `simple_compute(**shape_dict)` as the main compute function and `reference_fn(**kwargs)` as a thin wrapper (matching existing convention in `matmul_ref.py`, `chunk_gla_ref.py`)
+- Include a private `_make_test_data()` helper for internal use by `simple_compute` (not a public API for evaluate.py — evaluate.py only calls `simple_compute`/`reference_fn`)
+- Include source traceability header:
+  ```python
+  # Source: primatrix/pallas-kernel @ branch: <branch>
+  # Commit: <sha>
+  # Initialized: <date>
+  ```
+
+The upstream source files are preserved unmodified in `kernel-evolve/upstream/<kernel_name>/` for traceability, but this directory is NOT part of the evaluate.py code path.
 
 ### Step 4 — Generate template kernel
 
-- Copy the kernel code and consolidate into `kernel-evolve/examples/kernels/<kernel_name>.py`
-- Wrap the entire file content between `# EVOLVE-BLOCK-START` and `# EVOLVE-BLOCK-END` markers
-- Export `optimized_compute` function (alias to the upstream compute function if names differ)
-- Export `_make_test_data()` for consistency with evaluate.py
+Generate `kernel-evolve/examples/kernels/<kernel_name>.py`:
+
+- Start from the consolidated ref code
+- Place EVOLVE-BLOCK markers **carefully** — NOT around the entire file. The boundary must follow existing conventions:
+  - **Outside EVOLVE-BLOCK** (frozen): imports, `_make_test_data()`, constants, `optimized_compute` function signature
+  - **Inside EVOLVE-BLOCK** (mutable): Pallas kernel functions, orchestration logic, tiling parameters, block specs, grid configurations, memory layout choices
+- Export `optimized_compute(**shape_dict)` as the main compute function
 - Include descriptive docstring with:
-  - Kernel description
-  - Optimization targets
+  - Kernel description and optimization targets
   - Reference dimensions from upstream tests
 
 ### Step 5 — Copy test cases
@@ -103,12 +124,12 @@ Create `kernel-evolve/tests/standalone_<kernel_name>_test.py`:
 ```python
 """Standalone accuracy comparison test for <kernel_name>.
 
-Runs both ref (from primatrix/pallas-kernel) and template,
-compares outputs with np.testing.assert_allclose.
+Runs both ref and template on TPU, compares outputs with
+np.testing.assert_allclose. Requires TPU hardware.
 """
 # Import ref and template compute functions
-# Generate test data using _make_test_data()
-# Run both, compare with assert_allclose(ref_output, template_output, atol=..., rtol=...)
+# Run both with the same shape parameters
+# Compare with assert_allclose(ref_output, template_output, atol=..., rtol=...)
 ```
 
 Input shapes are extracted from upstream test cases.
@@ -123,7 +144,7 @@ Create `kernel-evolve/examples/<kernel_name>.yaml`:
 # Initialized: <date>
 
 kernel:
-  name: "<kernel_name>"
+  name: "<kernel_name>"    # Defaults to kernel_name arg; user may customize
   template: "kernels/<kernel_name>.py"
   reference: "kernels/<kernel_name>_ref.py"
   evolve_markers:
@@ -163,15 +184,32 @@ session:
 
 If shapes cannot be automatically extracted from upstream tests, the skill prompts the user to provide them.
 
-### Step 8 — Verify baseline
+**Note**: The `kernel.name` field defaults to the `<kernel_name>` argument but may be customized by the user after generation (e.g., upstream `matmul` might become `tiled_matmul`).
 
-- Run the standalone accuracy comparison test locally (if JAX is available)
-- Verify that ref and template produce identical outputs
-- If verification fails, report the discrepancy and pause for user intervention
+### Step 8 — Validate generated config
 
-### Step 9 — Cleanup
+Validate the generated YAML against the Pydantic schema:
 
-- Delete the temporary clone directory (`/tmp/pallas-kernel-<random>`)
+```python
+from kernel_evolve.config import load_config
+load_config("kernel-evolve/examples/<kernel_name>.yaml")
+```
+
+This catches schema mismatches before the user tries to run `pallas-evolve:start`. If validation fails, fix the YAML and re-validate.
+
+### Step 9 — Verify baseline
+
+Since Pallas TPU kernels require TPU hardware for execution:
+
+- **Syntax & import check**: Verify that both `_ref.py` and template files have valid Python syntax and that all imports resolve correctly
+- **TPU verification (optional)**: If the user has TPU access (kubectl connected to GKE cluster), offer to submit a baseline evaluation via `pallas-evolve:submit` to verify correctness on real hardware
+- **Note to user**: Full numerical accuracy verification requires TPU hardware and will be performed during the first round of `pallas-evolve:start` (Round 0 baseline)
+
+If syntax/import verification fails, report the error and pause for user intervention.
+
+### Step 10 — Cleanup and summary
+
+- Delete the temporary clone directory (`/tmp/pallas-kernel-<random>`) — **this runs regardless of success or failure of previous steps**
 - Output summary of generated files
 - Print next-step instruction: `"Run /pallas-evolve:start <kernel_name>.yaml to begin optimization"`
 
@@ -183,26 +221,29 @@ After successful initialization:
 kernel-evolve/examples/
 ├── <kernel_name>.yaml                    # Generated config
 └── kernels/
-    ├── <kernel_name>/                    # Upstream source (unmodified copy)
-    │   ├── __init__.py
-    │   ├── chunk.py
-    │   └── ...
-    ├── <kernel_name>_ref.py              # Reference entry: imports from <kernel_name>/, exports reference_fn
-    └── <kernel_name>.py                  # Template: consolidated code + EVOLVE-BLOCK markers, exports optimized_compute
+    ├── <kernel_name>_ref.py              # Self-contained reference: all upstream code inlined, exports simple_compute + reference_fn
+    └── <kernel_name>.py                  # Self-contained template: EVOLVE-BLOCK markers around kernel logic, exports optimized_compute
+
+kernel-evolve/upstream/
+└── <kernel_name>/                        # Unmodified upstream source (for traceability, not used by evaluate.py)
+    ├── __init__.py
+    ├── chunk.py
+    └── ...
 
 kernel-evolve/tests/
 ├── test_<kernel_name>.py                 # Copied from upstream (import paths adapted)
-└── standalone_<kernel_name>_test.py      # Generated accuracy comparison test
+└── standalone_<kernel_name>_test.py      # Generated accuracy comparison test (requires TPU)
 ```
 
 ## Integration with Existing System
 
 ### evaluate.py Compatibility
 
-The generated files follow evaluate.py's function discovery conventions:
-- **Reference**: `reference_fn` or `simple_compute` in `_ref.py`
-- **Template**: `optimized_compute` or `kernel_fn` in the template file
-- **Test data**: `_make_test_data()` in both files
+evaluate.py loads kernel code via `exec(kernel_code, exec_globals)` and discovers functions by name. The generated files must be fully self-contained (no relative imports) and export:
+- **Reference (`_ref.py`)**: `simple_compute(**shape_dict)` as the primary function, plus `reference_fn(**kwargs)` as a thin wrapper
+- **Template**: `optimized_compute(**shape_dict)` as the primary function
+
+The private `_make_test_data()` helper is used internally by the compute functions — evaluate.py does NOT call it directly. It calls `simple_compute(**shape)` / `optimized_compute(**shape)` passing shape parameters as keyword arguments.
 
 ### pallas-evolve:start Handoff
 
@@ -222,7 +263,7 @@ All generated files include source metadata:
 # Initialized: <date>
 ```
 
-This enables future comparison with upstream updates.
+The unmodified upstream source is preserved in `kernel-evolve/upstream/<kernel_name>/` for reference.
 
 ## Skill File Location
 
@@ -236,16 +277,21 @@ This places it alongside the existing pallas-evolve skills (start, submit, analy
 
 | Error | Behavior |
 |-------|----------|
-| Clone fails (network, auth, branch not found) | Report error, suggest checking branch name and network |
-| Kernel directory not found in upstream | List available kernel directories, ask user to verify name |
-| Test files not found in upstream | Warn but continue; generate comparison test from kernel code |
-| Function signature mismatch (no recognizable compute function) | Report available functions, ask user which to use |
-| Baseline verification fails (ref != template) | Report numerical diff, pause for user review |
-| Files already exist in target location | Ask user: overwrite or skip |
+| Clone fails (network, auth, branch not found) | Report error, suggest checking branch name and network. Cleanup temp dir. |
+| Kernel directory not found in upstream | List available kernel directories, ask user to verify name. Cleanup temp dir. |
+| Test files not found in upstream | Warn but continue; generate comparison test from kernel code. |
+| Function signature mismatch (no recognizable compute function) | Report available functions, ask user which to use. |
+| External dependencies detected | Warn user, note dependency in YAML comments, suggest custom K8s job template. |
+| Upstream code too complex for auto-consolidation | Generate scaffold with TODO markers, inform user of manual steps needed. |
+| YAML config validation fails | Fix and re-validate; report to user if unfixable. |
+| Syntax/import verification fails | Report error details, pause for user review. |
+| Files already exist in target location | Ask user: overwrite or skip. |
+
+**Cleanup guarantee**: The temporary clone directory is always deleted, even if an error occurs in any step.
 
 ## Non-Goals
 
 - **Ongoing sync with upstream**: This is a one-time init. No automatic update mechanism.
-- **Modifying upstream code**: Ref files are unmodified copies.
+- **Modifying upstream code**: Upstream source files are preserved unmodified in `kernel-evolve/upstream/`.
 - **Starting optimization**: The skill ends at initialization. User invokes `pallas-evolve:start` separately.
 - **K8s Job template generation**: Uses existing templates; only generates the YAML config.
