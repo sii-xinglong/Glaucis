@@ -110,6 +110,77 @@ def stage_correctness(kernel_code, reference_code, shapes, rtol, atol, exec_glob
     return {"ok": False, "error": f"Correctness error: {traceback.format_exc()}", "max_diff": 0.0}
 
 
+def _is_computation_event(event):
+  """Check if a trace event represents a TPU computation."""
+  name = event.get("name") or ""
+  return (
+    "jit_computation" in name
+    or "jit(" in name
+    or "pallas" in name.lower()
+  )
+
+
+def _cluster_by_gap(events, n_clusters):
+  """Cluster sorted events into n_clusters groups using largest gaps.
+
+  Computes gaps between consecutive events, finds the (n_clusters - 1)
+  largest gaps as iteration boundaries, and splits events at those points.
+
+  Returns list of event lists, or None if clustering fails.
+  """
+  if len(events) < n_clusters:
+    return None
+
+  gaps = []
+  for i in range(len(events) - 1):
+    gap = events[i + 1]["ts"] - (events[i]["ts"] + events[i]["dur"])
+    gaps.append((gap, i))
+
+  gaps.sort(key=lambda x: x[0], reverse=True)
+  boundary_indices = sorted(g[1] for g in gaps[:n_clusters - 1])
+
+  clusters = []
+  prev = 0
+  for idx in boundary_indices:
+    clusters.append(events[prev:idx + 1])
+    prev = idx + 1
+  clusters.append(events[prev:])
+
+  if len(clusters) != n_clusters or any(len(c) == 0 for c in clusters):
+    return None
+
+  return clusters
+
+
+def _extract_iteration_times(events, tpu_pid, n_iters=5):
+  """Extract per-iteration device times from xprof trace events.
+
+  xprof trace events use microsecond units for ts and dur fields
+  (Chrome Trace Format convention). Returns milliseconds, or None on failure.
+  """
+  comp_events = sorted(
+    [e for e in events
+     if e.get("pid") == tpu_pid
+     and "dur" in e
+     and _is_computation_event(e)],
+    key=lambda e: e["ts"]
+  )
+
+  if not comp_events:
+    return None
+
+  clusters = _cluster_by_gap(comp_events, n_iters)
+  if clusters is None:
+    return None
+
+  times_ms = []
+  for cluster in clusters:
+    start = cluster[0]["ts"]
+    end = max(e["ts"] + e["dur"] for e in cluster)
+    times_ms.append((end - start) / 1000.0)
+  return times_ms
+
+
 def stage_performance(exec_globals, shapes, warmup=10, iters=50):
   try:
     kernel_fn = _resolve_compute_fn(exec_globals, allow_reference=True)
