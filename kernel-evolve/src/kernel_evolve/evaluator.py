@@ -131,7 +131,7 @@ class EvalRequest:
 class BatchEvalRequest:
   reference_code: str
   shapes: list[dict[str, Any]]
-  variants: list[dict[str, str]]
+  variants: list[dict[str, Any]]
   rtol: float = 1e-2
   atol: float = 1e-2
 
@@ -157,6 +157,7 @@ class BatchEvalRequest:
         shapes=self.shapes,
         rtol=self.rtol,
         atol=self.atol,
+        metadata=v.get("metadata", {}),
       )
       for v in self.variants
     ]
