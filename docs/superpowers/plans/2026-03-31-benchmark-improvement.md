@@ -537,6 +537,9 @@ def test_stage_benchmark_returns_benchmark_data(tmp_path):
     json.dumps({"traceEvents": trace_events}), None
   )
 
+  # Create dummy .xplane.pb so os.walk finds it and proceeds to xprof parsing
+  (tmp_path / "trace.xplane.pb").write_bytes(b"")
+
   # Patch module-level attributes on the loaded evaluate module
   with patch.object(evaluate, "jax") as mock_jax, \
        patch.object(evaluate, "raw_to_tool_data", mock_xprof):
@@ -577,7 +580,6 @@ def test_stage_benchmark_wallclock_fallback(tmp_path):
        patch.object(evaluate, "raw_to_tool_data", None):
     mock_jax.jit.return_value = mock_jitted
     mock_jax.profiler.ProfileOptions.return_value = MagicMock()
-    mock_jax.profiler.start_trace.side_effect = Exception("no xprof")
 
     result = evaluate.stage_benchmark(
       globals_dict,
@@ -616,6 +618,9 @@ def test_stage_benchmark_xprof_average_fallback(tmp_path):
   mock_xprof.xspace_to_tool_data.return_value = (
     json.dumps({"traceEvents": trace_events}), None
   )
+
+  # Create dummy .xplane.pb so os.walk finds it and proceeds to xprof parsing
+  (tmp_path / "trace.xplane.pb").write_bytes(b"")
 
   with patch.object(evaluate, "jax") as mock_jax, \
        patch.object(evaluate, "raw_to_tool_data", mock_xprof):
@@ -1102,7 +1107,20 @@ Delete `stage_performance()` from `kernel-evolve/docker/evaluate.py` (the functi
 
 - [ ] **Step 2: Remove old stage_profile function**
 
-Delete `stage_profile()` from `kernel-evolve/docker/evaluate.py` (the function with local `import jax` and `from xprof.convert import raw_to_tool_data`). Also remove the local `import jax` from `_has_tpu()` — it now uses the module-level import.
+Delete `stage_profile()` from `kernel-evolve/docker/evaluate.py` (the function with local `import jax` and `from xprof.convert import raw_to_tool_data`). Also remove the local `import jax` from `_has_tpu()` and add an explicit guard:
+
+```python
+def _has_tpu() -> bool:
+  if jax is None:
+    return False
+  try:
+    devices = jax.devices()
+    print(f"JAX devices: {devices}", file=sys.stderr)
+    return any(d.platform == "tpu" for d in devices)
+  except Exception as e:
+    print(f"TPU detection error: {e}", file=sys.stderr)
+    return False
+```
 
 - [ ] **Step 3: Update test_stage_performance_accepts_reference_entrypoints**
 
@@ -1129,7 +1147,6 @@ def test_stage_benchmark_accepts_reference_entrypoints(tmp_path):
        patch.object(evaluate, "raw_to_tool_data", None):
     mock_jax.jit.return_value = mock_jitted
     mock_jax.profiler.ProfileOptions.return_value = MagicMock()
-    mock_jax.profiler.start_trace.side_effect = Exception("no xprof")
 
     result = evaluate.stage_benchmark(
       globals_dict,
