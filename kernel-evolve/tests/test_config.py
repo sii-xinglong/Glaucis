@@ -139,3 +139,63 @@ batch:
   cfg = load_config(f)
   assert cfg.batch.variants_per_round == 3
   assert cfg.batch.top_k == 2
+
+
+def test_evolve_config_with_tuning_params():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    tpu={"cluster": "c", "zone": "z"},
+    tuning_params={
+      "params": {
+        "BLOCK_M": {"values": [64, 128]},
+        "BLOCK_N": {"values": [32, 64]},
+      },
+      "constraints": ["BLOCK_M >= BLOCK_N"],
+      "max_configs": 16,
+      "enabled": True,
+    },
+  )
+  assert cfg.tuning_params is not None
+  assert "BLOCK_M" in cfg.tuning_params.params
+  assert cfg.tuning_params.max_configs == 16
+  assert cfg.tuning_params.constraints == ["BLOCK_M >= BLOCK_N"]
+
+
+def test_evolve_config_without_tuning_params():
+  cfg = EvolveConfig(
+    kernel={"name": "test", "template": "k.py", "reference": "r.py"},
+    shapes=[{"M": 64}],
+    tpu={"cluster": "c", "zone": "z"},
+  )
+  assert cfg.tuning_params is None
+
+
+def test_load_config_with_tuning_params(tmp_path):
+  yaml_content = """
+kernel:
+  name: "test"
+  template: "k.py"
+  reference: "r.py"
+shapes:
+  - { M: 64 }
+tpu:
+  cluster: "c"
+  zone: "z"
+tuning_params:
+  params:
+    BLOCK_M:
+      values: [64, 128, 256]
+    BLOCK_N:
+      values: [32, 64]
+  constraints:
+    - "BLOCK_M >= BLOCK_N"
+  max_configs: 8
+"""
+  f = tmp_path / "config.yaml"
+  f.write_text(yaml_content)
+  cfg = load_config(f)
+  assert cfg.tuning_params is not None
+  assert "BLOCK_M" in cfg.tuning_params.params
+  assert cfg.tuning_params.params["BLOCK_M"].values == [64, 128, 256]
+  assert cfg.tuning_params.max_configs == 8

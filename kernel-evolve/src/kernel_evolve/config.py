@@ -6,6 +6,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from kernel_evolve.tuning import TuningConfig
+
 
 class EvolveMarkers(BaseModel):
   start: str = "# EVOLVE-BLOCK-START"
@@ -60,6 +62,7 @@ class EvolveConfig(BaseModel):
   tpu: TPUConfig
   session: SessionConfig = Field(default_factory=SessionConfig)
   batch: BatchConfig = Field(default_factory=BatchConfig)
+  tuning_params: TuningConfig | None = None
 
 
 def load_config(path: str | Path) -> EvolveConfig:
