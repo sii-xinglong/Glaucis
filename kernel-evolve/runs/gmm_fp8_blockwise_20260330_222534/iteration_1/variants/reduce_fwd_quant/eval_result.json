@@ -1,6 +1,0 @@
-{
-  "status": "INCORRECT",
-  "variant_id": "reduce_fwd_quant",
-  "error": "Correctness failed for shape {'M': 8192, 'K': 2048, 'N': 512, 'G': 32}: max_diff=120649.0",
-  "max_diff": 120649.0
-}
