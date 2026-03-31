@@ -20,7 +20,7 @@ def _load_evaluate_module():
   return module
 
 
-def test_stage_performance_accepts_reference_entrypoints():
+def test_stage_benchmark_accepts_reference_entrypoints(tmp_path):
   evaluate = _load_evaluate_module()
 
   globals_dict = {
@@ -28,15 +28,29 @@ def test_stage_performance_accepts_reference_entrypoints():
     "reference_fn": lambda **kwargs: kwargs["M"],
   }
 
-  result = evaluate.stage_performance(
-    globals_dict,
-    shapes=[{"M": 4}],
-    warmup=1,
-    iters=2,
-  )
+  mock_lowered = MagicMock()
+  mock_compiled = MagicMock()
+  mock_compiled.return_value = 42
+  mock_compiled.memory_analysis.side_effect = Exception("no TPU")
+  mock_lowered.compile.return_value = mock_compiled
+  mock_jitted = MagicMock()
+  mock_jitted.lower.return_value = mock_lowered
+
+  with patch.object(evaluate, "jax") as mock_jax, \
+       patch.object(evaluate, "raw_to_tool_data", None):
+    mock_jax.jit.return_value = mock_jitted
+    mock_jax.profiler.ProfileOptions.return_value = MagicMock()
+
+    result = evaluate.stage_benchmark(
+      globals_dict,
+      shapes=[{"M": 4}],
+      trace_dir=str(tmp_path),
+      warmup=1,
+      n_iters=2,
+    )
 
   assert result["ok"] is True
-  assert result["latency_ms"] >= 0.0
+  assert result["latency_ms"] > 0
 
 
 def test_stage_correctness_uses_reference_entrypoint_names():
