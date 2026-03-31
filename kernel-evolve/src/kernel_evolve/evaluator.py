@@ -8,11 +8,68 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
 
+import numpy as np
+
 
 class EvalStatus(IntEnum):
   COMPILE_ERROR = 0
   INCORRECT = 1
   SUCCESS = 2
+
+
+@dataclass
+class BenchmarkData:
+  lower_time_ms: float
+  compile_time_ms: float
+  evaluation_times_ms: tuple[float, ...]
+  peak_memory_mb: float | None
+  timing_source: str = "xprof_clustered"
+
+  @property
+  def median_ms(self) -> float:
+    return float(np.median(self.evaluation_times_ms))
+
+  @property
+  def min_ms(self) -> float:
+    return float(np.min(self.evaluation_times_ms))
+
+  @property
+  def max_ms(self) -> float:
+    return float(np.max(self.evaluation_times_ms))
+
+  @property
+  def stddev_ms(self) -> float:
+    return float(np.std(self.evaluation_times_ms))
+
+  @property
+  def cv(self) -> float:
+    """Coefficient of variation (stddev / median)."""
+    med = self.median_ms
+    return self.stddev_ms / med if med > 0 else 0.0
+
+  def to_dict(self) -> dict[str, Any]:
+    return {
+      "lower_time_ms": self.lower_time_ms,
+      "compile_time_ms": self.compile_time_ms,
+      "evaluation_times_ms": list(self.evaluation_times_ms),
+      "peak_memory_mb": self.peak_memory_mb,
+      "median_ms": self.median_ms,
+      "min_ms": self.min_ms,
+      "max_ms": self.max_ms,
+      "stddev_ms": self.stddev_ms,
+      "cv": self.cv,
+      "timing_source": self.timing_source,
+    }
+
+  @classmethod
+  def from_dict(cls, data: dict[str, Any]) -> BenchmarkData:
+    return cls(
+      lower_time_ms=data.get("lower_time_ms", 0.0),
+      compile_time_ms=data.get("compile_time_ms", 0.0),
+      evaluation_times_ms=tuple(data.get("evaluation_times_ms", ())),
+      peak_memory_mb=data.get("peak_memory_mb"),
+      timing_source=data.get("timing_source", "xprof_clustered"),
+    )
 
 
 @dataclass
