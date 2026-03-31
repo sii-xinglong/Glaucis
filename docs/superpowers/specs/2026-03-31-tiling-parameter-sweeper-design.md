@@ -63,18 +63,19 @@ tuning_params:
 
 ## Grid Generation Module
 
-**New file:** `kernel_evolve/src/kernel_evolve/tuning.py`
+**New file:** `kernel-evolve/src/kernel_evolve/tuning.py`
 
 ### Data Models
 
+The YAML uses a dict structure (`params: {BLOCK_K: {values: [...]}}`) but the Pydantic model uses `dict[str, TuningParam]` to match. The param name is the dict key, not a field on `TuningParam`.
+
 ```python
 class TuningParam(BaseModel):
-    name: str
     values: list[int | float]
-    marker: str | None = None
+    marker: str | None = None  # defaults to "{param_name} =" at runtime
 
 class TuningConfig(BaseModel):
-    params: list[TuningParam]
+    params: dict[str, TuningParam]  # key = param name (e.g., "BLOCK_K")
     constraints: list[str] = []
     max_configs: int = 32
     enabled: bool = True
@@ -85,22 +86,24 @@ class TuningConfig(BaseModel):
 **`generate_configs(tuning_config: TuningConfig) -> list[dict[str, int | float]]`**
 
 1. Compute cartesian product of all `param.values`.
-2. Filter by constraints: for each config dict, evaluate each constraint string with the config as locals. Keep configs where all constraints return `True`.
-3. If result exceeds `max_configs`, take a deterministic uniform sample: sort by hash of config repr, take every `N/max_configs`-th entry.
+2. Filter by constraints: for each config dict, evaluate each constraint string with the config as locals using `eval()` (trusted input from project YAML, not user-facing). Keep configs where all constraints return `True`.
+3. If result exceeds `max_configs`, take a deterministic uniform sample: sort by `hashlib.sha256` of `repr(config)`, take every `N/max_configs`-th entry. Using `hashlib` (not built-in `hash()`) ensures determinism across Python processes regardless of `PYTHONHASHSEED`.
 4. Return the list of valid config dicts.
 
-**`apply_config(kernel_code: str, config: dict[str, int | float], params: list[TuningParam]) -> str`**
+**`apply_config(kernel_code: str, config: dict[str, int | float], params: dict[str, TuningParam]) -> str`**
 
-For each param in the config:
-1. Determine marker: `param.marker` or `f"{param.name} ="`.
-2. Use regex `r"({marker}\s*)(\S+)"` to find the assignment line.
+Only supports simple scalar assignments (e.g., `BLOCK_K = 128`). Complex expressions like `BLOCK_K = 2 * 64` or list assignments are not supported and will not match.
+
+For each param name and value in the config:
+1. Determine marker: `params[name].marker` or `f"{name} ="`.
+2. Use regex `r"({marker}\s*)(\d+(?:\.\d+)?)"` to find a simple scalar assignment.
 3. Replace the value portion with the new value.
 4. If marker not found: log warning, skip this param.
 5. If marker found multiple times: raise error (ambiguous).
 6. After all substitutions, validate syntax with `ast.parse()`.
 7. Return modified code.
 
-**`expand_variants(variants: list[str], tuning_config: TuningConfig, params: list[TuningParam]) -> list[tuple[str, dict]]`**
+**`expand_variants(variants: list[str], tuning_config: TuningConfig) -> list[tuple[str, dict]]`**
 
 For each variant code string, apply each config from `generate_configs()`, returning `(modified_code, config_dict)` pairs. Total output size = `len(variants) * len(configs)`.
 
@@ -118,10 +121,12 @@ Each expanded variant carries:
 - `code_variant_id`: identifies the LLM-generated code (e.g., `L1_v1`)
 - `tuning_config`: the tiling config dict (e.g., `{"BLOCK_K": 256, "BLOCK_V": 128}`)
 
-This metadata is:
-1. Written as `_tuning_config.json` alongside the kernel code in the submission payload.
-2. Read by `docker/evaluate.py` and included in the `EVAL_RESULT:` JSON output.
-3. Used by the ANALYZE phase to group results.
+This metadata flows through the existing payload mechanism:
+1. The `tuning_config` dict is embedded in the `EvalRequest` metadata (inside the base64-encoded payload that `KubeEvaluator` sends via ConfigMap).
+2. `docker/evaluate.py` reads it from the request payload and passes it through to the `EVAL_RESULT:` JSON output.
+3. The ANALYZE phase reads `tuning_config` from each result to group by code variant.
+
+No new sidecar files or delivery mechanisms are needed — the existing payload pipeline carries the data end-to-end.
 
 ### Analysis Grouping
 
@@ -163,15 +168,20 @@ Add `tuning_params: TuningConfig | None = None` to `EvolveConfig`.
 
 ### `evaluator.py`
 
-Add optional `tuning_config: dict[str, int | float] | None = None` to both `EvalRequest` and `EvalResult`.
+`EvalRequest` and `EvalResult` are `@dataclass` classes (not Pydantic). Both already have a `metadata: dict[str, Any]` field. Rather than adding a new field, carry `tuning_config` inside `metadata`:
+
+- On request: `metadata["tuning_config"] = {"BLOCK_K": 256, ...}` and `metadata["code_variant_id"] = "L1_v1"`
+- On result: `docker/evaluate.py` passes `tuning_config` and `code_variant_id` through from request metadata to result metadata.
+
+This avoids breaking the existing `to_dict()`/`from_dict()`/`encode_b64()`/`decode_b64()` serialization contracts.
 
 ### `kube_evaluator.py`
 
-No changes to submission logic. Expanded variants are additional entries in `BatchEvalRequest`. The variant payload includes a `_tuning_config.json` sidecar when tuning is active.
+No changes. Expanded variants are additional entries in `BatchEvalRequest`. The tuning metadata travels inside the existing `metadata` dict on each `EvalRequest`, which is already serialized into the base64 payload.
 
 ### `docker/evaluate.py`
 
-Read `_tuning_config.json` if present. Include the config dict in the `EVAL_RESULT:` JSON output line.
+Read `tuning_config` and `code_variant_id` from the request metadata dict. Include both in the `EVAL_RESULT:` JSON output. No file-based sidecar mechanism needed — the existing payload carries this data.
 
 ### `mutation.py`
 
@@ -181,10 +191,12 @@ No changes. EVOLVE-BLOCK mutation and tiling substitution are orthogonal.
 
 | Skill | Change |
 |-------|--------|
-| `start` | Read `tuning_params` from config; pass to expansion step |
-| `submit` | No changes (already handles batch variants) |
-| `analyze` | Group results by code variant; report best tiling per variant; report tiling sensitivity |
-| `reflect` | Record tiling insights (e.g., "BLOCK_K=256 consistently best") |
+| `start` | Read `tuning_params` from config. After THINK phase generates code variants, call `expand_variants()` before passing to SUBMIT. The expansion happens in the `start` skill's main loop, between the LLM mutation step and the `submit` skill invocation. |
+| `submit` | No changes (already handles batch variants). Expanded variants are indistinguishable from LLM-generated variants at the submission layer. |
+| `analyze` | After collecting all `EvalResult`s, group by `metadata["code_variant_id"]`. For each group: find the config with best speedup, compute tiling sensitivity (max/min ratio). Score each code variant by its best config. The existing per-variant analysis (bottleneck classification, profiling) runs on the best-config result only. |
+| `reflect` | When recording round insights, include tiling observations: which params had the most impact, whether sensitivity was high or low. |
+
+**Naming interaction with lineage tracking:** The existing lineage naming uses `L{n}_v{m}` for code variants. The tiling suffix `_t{idx}` is appended, yielding `L1_v2_t3`. The lineage tracker operates on `code_variant_id` (without the `_t{idx}` suffix), so lineage pruning/selection decisions are based on the best code variant, not individual tiling configs.
 
 ## Error Handling
 
@@ -212,8 +224,8 @@ No changes. EVOLVE-BLOCK mutation and tiling substitution are orthogonal.
 
 ### Extended: `test_evaluator.py`
 
-- `EvalRequest`/`EvalResult` serialization with `tuning_config` field
-- Backward compatibility without `tuning_config`
+- `EvalRequest`/`EvalResult` metadata carries `tuning_config` and `code_variant_id` correctly through serialization round-trip
+- Backward compatibility: results without `tuning_config` in metadata work unchanged
 
 ### Integration Test
 
@@ -229,7 +241,7 @@ This design is inspired by tokamax's auto-tuning architecture:
 | `_get_heuristics_config(ba)` | LLM-selected default tiling (existing behavior) |
 | `Autotuner.autotune()` | Post-mutation expansion + batch submission |
 | `ArgSpec` (benchmark shapes) | Fixed shapes in YAML config (existing `shapes` section) |
-| `ConfigBase` per op | `TuningParam` list in YAML |
+| `ConfigBase` per op | `TuningParam` dict in YAML |
 | Per-device cache | `lineages.json` `best_tuning_config` field |
 
 Key difference: tokamax sweeps configs for a fixed kernel implementation. Glaucis sweeps configs for each LLM-mutated kernel variant, combining structural exploration (LLM) with numeric exploration (grid search).
