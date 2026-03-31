@@ -54,7 +54,7 @@ def gmm_fp8_blockwise(
     lhs: jnp.ndarray,
     rhs: jnp.ndarray,
     group_sizes: jnp.ndarray,
-    tiling: tuple[int, ...] = (128, 128, 128) * 3,
+    tiling: tuple[int, ...] = (256, 512, 256, 256, 512, 128, 1024, 512, 128),
 ) -> jnp.ndarray:
     """GMM with fp8_blockwise quantization and tokamax backend."""
     tile_size = 128
@@ -79,7 +79,6 @@ def gmm_fp8_blockwise(
 
 def _gmm_fwd(lhs, rhs, group_sizes, qt_rule, tiling):
     tile_size = qt_rule.tile_size
-    tiling = tuple(min(t, tile_size) for t in tiling)
 
     lhs_bf16 = lhs
     lhs = qpl.quantize(
@@ -125,7 +124,6 @@ def _gmm_bwd(lhs_dtype, rhs_dtype, qt_rule, tiling, residual, grad):
     lhs, rhs, group_sizes, lhs_t = residual
     num_actual_groups = rhs.shape[0]
     tile_size = qt_rule.tile_size
-    tiling = tuple(min(t, tile_size) for t in tiling)
 
     dlhs_dout = qpl.quantize(
         grad,
