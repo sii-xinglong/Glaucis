@@ -1,5 +1,5 @@
 {
-  "round": 8,
+  "round": 9,
   "config": {
     "top_k": 2,
     "max_active_lineages": 4
@@ -8,10 +8,10 @@
     {
       "id": "L2",
       "parent": null,
-      "best_speedup": 9.005,
-      "best_kernel": "iteration_8/variants/L2_eliminate_gcumsum/kernel.py",
-      "direction": "eliminate_gcumsum",
-      "history": ["iter-1-mxu_utilization", "iter-2-v_tiling", "iter-3-reduce_inputs", "iter-4-fold_dh_pallas", "iter-5-fuse_fwd_combined", "iter-6-fori_v_bwd", "iter-7-recompute_dh_v2", "iter-8-eliminate_gcumsum"],
+      "best_speedup": 9.054,
+      "best_kernel": "iteration_9/variants/L2_bf16_h_residual/kernel.py",
+      "direction": "bf16_h_residual",
+      "history": ["iter-1-mxu_utilization", "iter-2-v_tiling", "iter-3-reduce_inputs", "iter-4-fold_dh_pallas", "iter-5-fuse_fwd_combined", "iter-6-fori_v_bwd", "iter-7-recompute_dh_v2", "iter-8-eliminate_gcumsum", "iter-9-bf16_h_residual"],
       "stagnant_rounds": 0
     }
   ],

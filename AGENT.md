@@ -420,6 +420,28 @@
   - L2_extra_scratch: spills -5.0%, speedup -2.7% (VMEM staging overhead)
 - **Fix**: Stop targeting register pressure reduction as primary optimization direction when the kernel is at ~9x or higher. Future optimization should focus on: (1) MXU pipeline efficiency, (2) algorithmic restructuring to reduce total matmul count, (3) reducing total VLIW bundle count through simplification. Register pressure reduction only helps when it does NOT add HBM traffic or disrupt MXU scheduling.
 - **First seen**: 2026-03-31, chunk_gla optimization round 8
+- **Extended**: 2026-03-31, round 9 — Phase reordering (merge_A_dA) achieved -17.7% spills and -22.0% fills but REGRESSED MXU util -6.0pp (32.1%→26.1%), confirming that even dramatic spill reduction harms performance when it disrupts MXU scheduling
+
+### [FP35] bf16 precision for accumulating matmuls causes correctness failure (extends FP31)
+- **Symptom**: Selectively using bf16 operands with `lax.Precision.DEFAULT` for the dh update matmul (`q_hat.T @ do` in Phase 6 backward) and forward h update (`k.T @ v_gated`) produces max_diff=22.28 (atol=10.0).
+- **Root cause**: The dh state accumulates across 64 time steps (T/chunk_size = 4096/64 = 64). Each time step's bf16 truncation error compounds through sequential state propagation. Unlike FP31 (global Precision.DEFAULT), this applied bf16 to ONLY the state-accumulating matmuls while keeping f32/HIGHEST for all others — but the accumulation makes even selective bf16 unsafe.
+- **Fix**: Any matmul whose output feeds into cross-time-step state accumulation MUST use f32 operands with Precision.HIGHEST. bf16 is ONLY safe for matmuls producing point-in-time values consumed without accumulation (see SO17). The rule: accumulated → f32; snapshot → bf16 OK.
+- **Extends**: FP31 (global Precision.DEFAULT fails) — this shows that selective bf16 for accumulating matmuls also fails.
+- **First seen**: 2026-03-31, chunk_gla optimization round 9
+
+### [FP36] VPU exp() optimization by manual CSE is negligible — compiler already optimizes
+- **Symptom**: Reducing exp() calls from 5 to 3 per backward time step (by deriving exp_gn_minus from existing values and reusing exp_pos) produced only -0.2% VLIW reduction (-19 bundles) and -0.3% speedup regression. Vector EUP util dropped 0.07pp.
+- **Root cause**: The Mosaic compiler performs common subexpression elimination (CSE) on exp() operations. Redundant exp() calls that could be derived from existing values are already optimized by the compiler. The hardware EUP unit is utilized at <1% — exp() is not a bottleneck. Manual exp() CSE provides negligible benefit and can slightly disrupt VLIW scheduling.
+- **Fix**: Do NOT manually optimize exp() call count in Pallas kernels. The EUP utilization at <1% confirms exp() is not a performance-limiting factor. Focus on MXU pipeline efficiency and HBM bandwidth instead.
+- **First seen**: 2026-03-31, chunk_gla optimization round 9
+
+### SO17: bf16 h residual storage — halve HBM bandwidth for forward-to-backward state snapshot (9.054x)
+- **Optimization**: Store the forward h state residual as bf16 instead of f32. Changed `h_ref` output ShapeDtypeStruct dtype from float32 to bfloat16. Forward kernel casts h state to bf16 before writing to `h_ref`. Backward already casts h to f32 on load via `.astype(jnp.float32)`.
+- **Impact**: 9.005x → 9.054x (+0.5%). h residual array [B,NT,H,K,V] = [2,64,16,128,128] reduced from 128MB (f32) to 64MB (bf16). VLIW bundles -0.9% (9332→9252), spills -2.9% (2.58M→2.50M), fills -3.0% (3.30M→3.20M).
+- **Why it works**: The h state at chunk boundaries is a point-in-time snapshot used for inter-chunk gradient contributions in the backward pass. It is consumed ONCE (not accumulated), so bf16 truncation errors do not compound. This is structurally different from the dh state update (FP35), which accumulates across 64 time steps.
+- **Applicable when**: A forward-to-backward residual is: (1) large enough that HBM bandwidth is meaningful, (2) consumed without accumulation in the backward pass, (3) used as an approximation (not exact value). The residual's role must be "read once, approximate OK."
+- **Rule**: Forward-to-backward residuals that are point-in-time snapshots consumed without accumulation can safely use bf16 storage. Residuals that feed into sequential state accumulation MUST stay f32 (see FP35).
+- **First seen**: 2026-03-31, chunk_gla optimization round 9
 
 ### SO11: Eliminating separate pallas_call via input recomputation (1.097x speedup — first to beat reference)
 - **What**: Removed the `a_ref` input from the fused backward kernel and eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call that computed the A matrix. Instead, recompute A inside the backward kernel as `b_a = dot(q_pos, k_neg.T) * scale` using already-available q and k tiles.
