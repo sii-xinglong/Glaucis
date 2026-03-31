@@ -191,9 +191,8 @@ class TestApplyConfig:
 
     def test_missing_marker_warns(self):
         params = {"MISSING_PARAM": TuningParam(values=[64])}
-        with pytest.warns(None) as record:
-            result = apply_config(SAMPLE_KERNEL, {"MISSING_PARAM": 64}, params)
-        # code unchanged
+        # apply_config logs a warning and skips; code is unchanged
+        result = apply_config(SAMPLE_KERNEL, {"MISSING_PARAM": 64}, params)
         assert result == SAMPLE_KERNEL
 
     def test_ambiguous_marker_raises(self):
