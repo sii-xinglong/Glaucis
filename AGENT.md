@@ -402,6 +402,25 @@
 - **Relationship**: Mirrors SO15 (forward fusion). Combined, the kernel now has just 2 pallas_calls: 1 combined forward + 1 combined backward.
 - **First seen**: 2026-03-31, chunk_gla optimization round 7
 
+### [FP33] Manual VMEM scratch staging counterproductive for Pallas backward kernel register pressure
+- **Symptom**: Adding 3 explicit VMEM scratch buffers (scratch_exp [BT,BK], scratch_A [BT,BT], scratch_dA [BT,BT]) for intermediate staging reduced register spills only 5% (2.72M→2.58M) while regressing speedup -2.7% (8.988x→8.749x).
+- **Root cause**: The explicit scratch store/load instructions add more VLIW overhead than the compiler's automatic spill management. The compiler's register allocator already produces reasonably efficient spill patterns for this kernel complexity. Adding explicit VMEM staging creates ADDITIONAL load/store instructions on top of the compiler's own spills, rather than replacing them.
+- **Fix**: Do NOT attempt to manually manage register pressure by adding VMEM scratch buffers for intermediate staging. The Mosaic compiler's register allocator is hard to beat with explicit staging at high kernel complexity (~9400 VLIW bundles). Prefer approaches that ELIMINATE intermediates (algebraic simplification, input elimination) rather than STAGE them.
+- **Extends**: FP29 (staged writes regress MXU util), R7 L2_reduce_intermediates (scoped recomputation counterproductive)
+- **First seen**: 2026-03-31, chunk_gla optimization round 8
+
+### [FP34] Register pressure reduction saturates at high optimization levels — spill reduction ≠ speedup
+- **Symptom**: Five different register pressure reduction strategies in Round 8 ALL successfully reduced spills (by 5-26%) but the maximum speedup improvement was +0.2%. The variant with the LARGEST spill reduction (-25.8%, L2_fwd_store_A) actually REGRESSED speedup by -0.8%.
+- **Root cause**: At ~9x speedup (2 fused pallas_calls, ~9400 VLIW bundles), register pressure is no longer the binding performance constraint. The remaining spills occur in locations where the compiler can overlap spill/fill traffic with MXU computation. Reducing spills doesn't free up useful pipeline slots because those slots are already utilized. The binding constraint has shifted to MXU pipeline utilization efficiency (~34% of single-MXU capacity) and single-MXU structural limitation (dual_ratio=0.0).
+- **Evidence**: Round 8 results across 5 variants:
+  - L2_fwd_store_A: spills -25.8%, speedup -0.8% (HBM traffic for A matrix offsets savings)
+  - L2_store_gated_residuals: spills -10.9%, speedup -1.9% (residual storage HBM cost > spill savings)
+  - L2_algebraic_simplify: spills -7.9%, speedup -0.8% (MXU util regressed from 34.6%→29.0%)
+  - L2_eliminate_gcumsum: spills -5.2%, speedup +0.2% (only winner — minimal HBM traffic change)
+  - L2_extra_scratch: spills -5.0%, speedup -2.7% (VMEM staging overhead)
+- **Fix**: Stop targeting register pressure reduction as primary optimization direction when the kernel is at ~9x or higher. Future optimization should focus on: (1) MXU pipeline efficiency, (2) algorithmic restructuring to reduce total matmul count, (3) reducing total VLIW bundle count through simplification. Register pressure reduction only helps when it does NOT add HBM traffic or disrupt MXU scheduling.
+- **First seen**: 2026-03-31, chunk_gla optimization round 8
+
 ### SO11: Eliminating separate pallas_call via input recomputation (1.097x speedup — first to beat reference)
 - **What**: Removed the `a_ref` input from the fused backward kernel and eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call that computed the A matrix. Instead, recompute A inside the backward kernel as `b_a = dot(q_pos, k_neg.T) * scale` using already-available q and k tiles.
 - **Why**: The separate pallas_call for A computation had its own compilation, launch overhead, DMA transfers (A tiles from HBM), and register allocation. By recomputing A inside the backward kernel (just 1 extra dot product), all of that overhead is eliminated: 27 fewer computation events (-10%), 2 fewer DMA transfers (-8%), and no HBM round-trip for A.
