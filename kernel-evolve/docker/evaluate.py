@@ -16,6 +16,16 @@ except ImportError:
 
 import numpy as np
 
+try:
+  import jax
+except ImportError:
+  jax = None
+
+try:
+  from xprof.convert import raw_to_tool_data
+except ImportError:
+  raw_to_tool_data = None
+
 
 def upload_to_gcs(
   job_name: str,
@@ -179,6 +189,231 @@ def _extract_iteration_times(events, tpu_pid, n_iters=5):
     end = max(e["ts"] + e["dur"] for e in cluster)
     times_ms.append((end - start) / 1000.0)
   return times_ms
+
+
+def stage_benchmark(exec_globals, shapes, trace_dir="/tmp/xplane_trace", warmup=3, n_iters=5):
+  """Merged performance + profile stage using hermetic xprof timing.
+
+  Execution flow:
+  1. Resolve kernel_fn
+  2. Compile with timing isolation (jax.jit().lower().compile())
+  3. Peak memory via memory_analysis()
+  4. Warmup (warmup iterations, outside profiler)
+  5. Profiled execution (n_iters iterations under xprof)
+  6. Parse .xplane.pb for per-iteration device times + hw utilization
+  7. Return BenchmarkData + profile metrics
+
+  Falls back to wallclock timing if xprof fails.
+  """
+  try:
+    kernel_fn = _resolve_compute_fn(exec_globals, allow_reference=True)
+    if kernel_fn is None:
+      return {"ok": False, "error": "No compute function found"}
+
+    shape = shapes[0]
+
+    # ── Step 2: Compilation isolation ──
+    static_names = list(shape.keys())
+    jitted = jax.jit(kernel_fn, static_argnames=static_names)
+
+    t0 = time.perf_counter()
+    lowered = jitted.lower(**shape)
+    lower_time_ms = (time.perf_counter() - t0) * 1000
+
+    t0 = time.perf_counter()
+    compiled = lowered.compile()
+    compile_time_ms = (time.perf_counter() - t0) * 1000
+
+    # ── Step 3: Peak memory ──
+    peak_memory_mb = None
+    try:
+      mem = compiled.memory_analysis()
+      if hasattr(mem, "peak_memory_in_bytes"):
+        peak_memory_mb = mem.peak_memory_in_bytes / (1024 * 1024)
+    except Exception:
+      pass
+
+    # ── Step 4: Warmup ──
+    for _ in range(warmup):
+      out = compiled()
+      if hasattr(out, "block_until_ready"):
+        out.block_until_ready()
+
+    # ── Step 5: Profiled execution with wallclock fallback ──
+    from pathlib import Path
+    Path(trace_dir).mkdir(parents=True, exist_ok=True)
+
+    wallclock_times = []
+    xprof_ok = False
+    events = []
+
+    if raw_to_tool_data is not None:
+      try:
+        options = jax.profiler.ProfileOptions()
+        options.python_tracer_level = 0
+        options.host_tracer_level = 2
+        options.advanced_configuration = {"tpu_trace_mode": "TRACE_COMPUTE_AND_SYNC"}
+
+        jax.profiler.start_trace(trace_dir, profiler_options=options)
+        try:
+          for _ in range(n_iters):
+            t0 = time.perf_counter()
+            out = compiled()
+            if hasattr(out, "block_until_ready"):
+              out.block_until_ready()
+            wallclock_times.append((time.perf_counter() - t0) * 1000)
+        finally:
+          jax.profiler.stop_trace()
+        xprof_ok = True
+      except Exception as e:
+        print(f"xprof profiling failed: {e}", file=sys.stderr)
+
+    # Wallclock-only fallback if xprof profiling failed
+    if not xprof_ok:
+      for _ in range(n_iters):
+        t0 = time.perf_counter()
+        out = compiled()
+        if hasattr(out, "block_until_ready"):
+          out.block_until_ready()
+        wallclock_times.append((time.perf_counter() - t0) * 1000)
+
+    # ── Step 6: Parse xprof trace ──
+    compute_ratio = None
+    memory_transfer_ratio = None
+    hw_utilization = None
+    profile_diag = {}
+    trace_events_path = None
+    timing_source = "wallclock"
+    eval_times = wallclock_times
+
+    if xprof_ok:
+      xplane_path = None
+      for root, _dirs, files in os.walk(trace_dir):
+        for f in files:
+          if f.endswith(".xplane.pb"):
+            xplane_path = os.path.join(root, f)
+            break
+        if xplane_path:
+          break
+
+      if xplane_path is not None:
+        try:
+          tool_data_result, _ = raw_to_tool_data.xspace_to_tool_data(
+            [xplane_path], "trace_viewer", {}
+          )
+          trace_data = json.loads(tool_data_result)
+          events = trace_data.get("traceEvents", [])
+
+          trace_events_path = os.path.join(trace_dir, "trace_events.json")
+          with open(trace_events_path, "w") as f:
+            json.dump(events, f)
+
+          # Find TPU device pid
+          tpu_pid = None
+          for event in events:
+            if "args" in event and event["args"].get("name") == "/device:TPU:0":
+              tpu_pid = event.get("pid")
+              break
+          if tpu_pid is None:
+            for event in events:
+              if "args" in event:
+                name = event["args"].get("name", "")
+                if name.startswith("/device:TPU:"):
+                  tpu_pid = event.get("pid")
+                  break
+
+          if tpu_pid is not None:
+            # Extract per-iteration device times
+            xprof_times = _extract_iteration_times(events, tpu_pid, n_iters)
+            if xprof_times is not None:
+              eval_times = xprof_times
+              timing_source = "xprof_clustered"
+            else:
+              # Fallback 2: average from trace window
+              comp_events = [
+                e for e in events
+                if e.get("pid") == tpu_pid and "dur" in e and _is_computation_event(e)
+              ]
+              if comp_events:
+                trace_start = comp_events[0]["ts"]
+                trace_end = comp_events[-1]["ts"] + comp_events[-1]["dur"]
+                total_time = trace_end - trace_start
+                if total_time > 0:
+                  eval_times = [total_time / n_iters / 1000.0] * n_iters
+                  timing_source = "xprof_average"
+
+            # Extract compute_ratio from sync/idle events
+            events_for_tpu = [e for e in events if e.get("pid") == tpu_pid]
+            computation_events = [
+              e for e in events_for_tpu
+              if "dur" in e and _is_computation_event(e)
+            ]
+            if len(computation_events) >= 2:
+              trace_start = computation_events[0]["ts"]
+              trace_end = computation_events[-1]["ts"] + computation_events[-1]["dur"]
+              sync_wait_total = 0
+              for event in events_for_tpu:
+                if "dur" not in event:
+                  continue
+                evt_start = event["ts"]
+                evt_end = evt_start + event["dur"]
+                if evt_start >= trace_start and evt_end <= trace_end:
+                  name = event.get("name") or ""
+                  if "SyncWait" in name or "idle" in name.lower():
+                    sync_wait_total += event["dur"]
+              total_time = trace_end - trace_start
+              if total_time > 0:
+                ratio = sync_wait_total / total_time
+                compute_ratio = 1.0 - ratio
+                memory_transfer_ratio = ratio
+
+            hw_utilization = parse_hw_utilization(events, tpu_pid)
+
+            # Diagnostics
+            process_names = {}
+            for event in events:
+              if "args" in event and "name" in event["args"]:
+                pid_val = event.get("pid")
+                if pid_val not in process_names:
+                  process_names[pid_val] = []
+                name_val = event["args"]["name"]
+                if name_val not in process_names[pid_val]:
+                  process_names[pid_val].append(name_val)
+
+            profile_diag = {
+              "process_names": {str(k): v for k, v in process_names.items()},
+              "selected_pid": tpu_pid,
+              "total_events": len(events),
+              "tpu_events": len(events_for_tpu),
+              "computation_events": len(computation_events),
+            }
+        except Exception as e:
+          print(f"xprof trace parsing failed: {e}", file=sys.stderr)
+          traceback.print_exc(file=sys.stderr)
+
+    # ── Step 7: Build result ──
+    from kernel_evolve.evaluator import BenchmarkData
+
+    benchmark = BenchmarkData(
+      lower_time_ms=lower_time_ms,
+      compile_time_ms=compile_time_ms,
+      evaluation_times_ms=tuple(eval_times),
+      peak_memory_mb=peak_memory_mb,
+      timing_source=timing_source,
+    )
+
+    return {
+      "ok": True,
+      "benchmark": benchmark.to_dict(),
+      "latency_ms": benchmark.median_ms,
+      "compute_ratio": compute_ratio,
+      "memory_transfer_ratio": memory_transfer_ratio,
+      "hw_utilization": hw_utilization,
+      "diagnostics": profile_diag,
+      "_trace_events_path": trace_events_path,
+    }
+  except Exception:
+    return {"ok": False, "error": f"Benchmark error: {traceback.format_exc()}"}
 
 
 def stage_performance(exec_globals, shapes, warmup=10, iters=50):
