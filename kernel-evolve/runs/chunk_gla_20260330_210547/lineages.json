@@ -1,5 +1,5 @@
 {
-  "round": 6,
+  "round": 7,
   "config": {
     "top_k": 2,
     "max_active_lineages": 4
@@ -11,17 +11,17 @@
       "best_speedup": 7.639,
       "best_kernel": "iteration_5/variants/L1_fold_dh_fuse_fwd/kernel.py",
       "direction": "fold_dh_fuse_fwd",
-      "history": ["iter-1-mxu_vpu_overlap", "iter-2-reduce_inputs", "iter-3-combined_fuse_skip", "iter-4-reduce_exp", "iter-5-fold_dh_fuse_fwd", "iter-6-bwd_grid_kv"],
-      "stagnant_rounds": 1
+      "history": ["iter-1-mxu_vpu_overlap", "iter-2-reduce_inputs", "iter-3-combined_fuse_skip", "iter-4-reduce_exp", "iter-5-fold_dh_fuse_fwd", "iter-6-bwd_grid_kv", "iter-7-bwd_grid_v_v2"],
+      "stagnant_rounds": 2
     },
     {
       "id": "L2",
       "parent": null,
-      "best_speedup": 7.845,
-      "best_kernel": "iteration_5/variants/L2_fuse_fwd_combined/kernel.py",
-      "direction": "fuse_fwd_combined",
-      "history": ["iter-1-mxu_utilization", "iter-2-v_tiling", "iter-3-reduce_inputs", "iter-4-fold_dh_pallas", "iter-5-fuse_fwd_combined", "iter-6-fori_v_bwd"],
-      "stagnant_rounds": 1
+      "best_speedup": 8.988,
+      "best_kernel": "iteration_7/variants/L2_recompute_dh_v2/kernel.py",
+      "direction": "bwd_fusion",
+      "history": ["iter-1-mxu_utilization", "iter-2-v_tiling", "iter-3-reduce_inputs", "iter-4-fold_dh_pallas", "iter-5-fuse_fwd_combined", "iter-6-fori_v_bwd", "iter-7-recompute_dh_v2"],
+      "stagnant_rounds": 0
     }
   ],
   "pruned": [

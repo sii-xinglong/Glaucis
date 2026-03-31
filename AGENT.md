@@ -387,6 +387,21 @@
 - **Fix**: chunk_gla REQUIRES `Precision.HIGHEST` for correctness. Do NOT reduce precision. This closes off precision reduction as an optimization direction for this kernel.
 - **First seen**: 2026-03-31, chunk_gla optimization round 6
 
+### [FP32] TPU block shape last-two-dim alignment constraint (8 and 128)
+- **Symptom**: `ValueError: The Pallas TPU lowering currently requires that the last two dimensions of your block shape are divisible by 8 and 128 respectively, or be equal to the respective dimensions of the overall array.` Block spec `(1, 1, 64, 64)` for array shape `(16, 128, 64, 128)` — last dim 64 not divisible by 128.
+- **Root cause**: Pallas TPU (Mosaic) lowering enforces that the last two dimensions of every BlockSpec block_shape must either: (1) be divisible by 8 (second-to-last) and 128 (last), OR (2) equal the full array dimension. This constraint applies to ALL in_specs and out_specs arrays. When V-tiling with BV_inner=64, the block shape's last dim becomes 64, which violates the 128-divisibility requirement.
+- **Fix**: V-dimension sub-tiling with BV < 128 is impossible via BlockSpec when V is the last array dimension. To V-tile, either: (1) transpose the array so V is NOT the last dimension, (2) keep BV=128 (full V dim), or (3) use a different approach (e.g., recomputation within the kernel body, not BlockSpec tiling). The constraint is on the block_shape, not the grid — adding a V grid dimension doesn't help if the block still has last dim < 128.
+- **First seen**: 2026-03-31, chunk_gla optimization round 7
+
+### SO16: Backward kernel fusion — merge bwd_dh + bwd_fused into single pallas_call (8.988x)
+- **Optimization**: Merged the two backward pallas_calls (chunk_bwd_dh_pallas for reverse-time dh state propagation, chunk_gla_bwd_fused for dq/dk/dv computation) into a single `_chunk_bwd_combined_kernel` with grid (B, H, K/BK, V/BV, NT). Time dimension uses "arbitrary" semantics with reverse scan. VMEM scratch holds dh state [BK, BV] between time steps. At each step: load h for this time step → compute dq/dk/dv using h and dh → update dh state. 5D BlockSpec `(1,1,1,BK,BV)` with 5-element index_map for h array `[B,NT,H,K,V]`. **KEY FIX from R6**: h BlockSpec MUST be 5D to match the 5D h array — R6 used 4D BlockSpec `(1,1,K,V)` which caused ndim mismatch.
+- **Impact**: 7.845x → 8.988x (+14.6%). Computation events: 177 → 171 (-3.4%). Architecture reduced from 3 pallas_calls to 2 total.
+- **Why it works**: Eliminates the dh tensor HBM round-trip (512MB for B=2,H=16,NT=64,K=128,V=128 at f32). The dh state stays in VMEM scratch instead of being written to HBM by bwd_dh and read back by bwd_fused. Same principle as SO15 (forward fusion) — merging sequential state-dependent kernels into a single pallas_call with VMEM scratch.
+- **Trade-off**: VLIW bundles increased +18.8% (7930→9420), register spills increased +8.8% (2.50M→2.72M). The HBM round-trip elimination vastly outweighs the increased kernel complexity.
+- **Applicable when**: Backward pass has two sequential pallas_calls where one propagates state (dh) consumed by the next. The "arbitrary" dimension semantics on the time dimension enables sequential state propagation within a single kernel. Requires 5D BlockSpec matching the 5D state array.
+- **Relationship**: Mirrors SO15 (forward fusion). Combined, the kernel now has just 2 pallas_calls: 1 combined forward + 1 combined backward.
+- **First seen**: 2026-03-31, chunk_gla optimization round 7
+
 ### SO11: Eliminating separate pallas_call via input recomputation (1.097x speedup — first to beat reference)
 - **What**: Removed the `a_ref` input from the fused backward kernel and eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call that computed the A matrix. Instead, recompute A inside the backward kernel as `b_a = dot(q_pos, k_neg.T) * scale` using already-available q and k tiles.
 - **Why**: The separate pallas_call for A computation had its own compilation, launch overhead, DMA transfers (A tiles from HBM), and register allocation. By recomputing A inside the backward kernel (just 1 extra dot product), all of that overhead is eliminated: 27 fewer computation events (-10%), 2 fewer DMA transfers (-8%), and no HBM round-trip for A.
