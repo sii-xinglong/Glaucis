@@ -580,11 +580,13 @@ def chunk_gla(q, k, v, g_gamma, scale, chunk_size):
         return o
 
     def _fwd(q, k, v):
+        # MUTATION (eliminate_gcumsum): g_cumsum removed from residuals
         h, o = chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size)
-        # Store q/k/v as bf16 to save 96MB HBM (192MB -> 96MB)
         return o, (q.astype(jnp.bfloat16), k.astype(jnp.bfloat16), v.astype(jnp.bfloat16), h)
 
     def _bwd(residuals, do):
+        # MUTATION (eliminate_gcumsum): g_cumsum removed from residuals,
+        # backward kernel recomputes gating from g_gamma scalar
         q_bf16, k_bf16, v_bf16, h = residuals
         q = q_bf16.astype(jnp.float32)
         k = k_bf16.astype(jnp.float32)

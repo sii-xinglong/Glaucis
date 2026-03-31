@@ -5,7 +5,7 @@ Combines TWO HBM-reduction mutations on the baseline:
      cast back to f32 in _bwd before backward computation.
   2. Eliminate flips: replace jnp.flip() + reversed data with reversed
      BlockSpec index_maps (NT-1-t), removing 5 flip HBM copies and the
-     chunk→flip→flatten reshape chain from the backward host code.
+     chunk->flip->flatten reshape chain from the backward host code.
 
 AL model reference dimensions:
   q, k, v: [2, 4096, 16, 128]
@@ -292,7 +292,7 @@ def chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size):
 #      from g_gamma scalar as [BT] vectors
 #   2. eliminate_flip: reversed BlockSpec index_maps (NT-1-t)
 #      replace jnp.flip() calls, eliminating 5 HBM flip copies
-#      and the chunk→flip→flatten reshape chain
+#      and the chunk->flip->flatten reshape chain
 #
 # MUTATION (bf16_residuals): q/k/v stored as bf16 in residuals,
 #   cast back to f32 in _bwd before backward computation
@@ -442,7 +442,7 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
     MUTATION (eliminate_flip): No jnp.flip() calls. Instead, reversed
     BlockSpec index_maps (NT-1-t) feed chunks in reverse order, and
     the kernel writes outputs to NT-1-i_t positions. This eliminates
-    5 flip HBM copies and the chunk→flip→flatten reshape chain.
+    5 flip HBM copies and the chunk->flip->flatten reshape chain.
 
     MUTATION (eliminate_gcumsum): g_cumsum removed from inputs entirely.
     The kernel recomputes gating from g_gamma scalar as [BT] vectors.
@@ -452,23 +452,36 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
     V = v.shape[-1]
     NT = T // BT
 
-    # MUTATION (eliminate_flip): Transpose to (B, H, T, dim) — NO chunking, NO flip, NO flatten
+    # Transpose to (B, H, T, dim) layout
     q_t = jnp.transpose(q, (0, 2, 1, 3))         # [B, H, T, K]
     k_t = jnp.transpose(k, (0, 2, 1, 3))         # [B, H, T, K]
     v_t = jnp.transpose(v, (0, 2, 1, 3))         # [B, H, T, V]
     do_t = jnp.transpose(do, (0, 2, 1, 3))       # [B, H, T, V]
 
-    # h is [B, NT, H, K, V]; transpose to [B, H, NT, K, V] — NO flip
+    # Reshape time into chunks: [B, H, NT, BT, dim]
+    q_chunked = q_t.reshape(B, H, NT, BT, K)
+    k_chunked = k_t.reshape(B, H, NT, BT, K)
+    v_chunked = v_t.reshape(B, H, NT, BT, V)
+    do_chunked = do_t.reshape(B, H, NT, BT, V)
+
+    # h is [B, NT, H, K, V]; transpose to [B, H, NT, K, V]
     h_bhntKV = jnp.transpose(h, (0, 2, 1, 3, 4))  # [B, H, NT, K, V]
+
+    # MUTATION (eliminate_flip): NO jnp.flip() calls — flatten NON-flipped chunked arrays
+    q_flat = q_chunked.reshape(B, H, NT * BT, K)
+    k_flat = k_chunked.reshape(B, H, NT * BT, K)
+    v_flat = v_chunked.reshape(B, H, NT * BT, V)
+    do_flat = do_chunked.reshape(B, H, NT * BT, V)
 
     grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV), NT)
 
-    # MUTATION (eliminate_flip): Reversed input index_maps use NT-1-t
-    def q_map(b, h, ki, vi, t):  return b, h, NT - 1 - t, ki
-    def k_map(b, h, ki, vi, t):  return b, h, NT - 1 - t, ki
-    def v_map(b, h, ki, vi, t):  return b, h, NT - 1 - t, vi
-    def h_map(b, h, ki, vi, t):  return b, h, NT - 1 - t, 0, 0
-    def do_map(b, h, ki, vi, t): return b, h, NT - 1 - t, vi
+    # MUTATION (eliminate_flip): Reversed input index_maps use NT_val-1-t
+    NT_val = NT
+    def q_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, ki
+    def k_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, ki
+    def v_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, vi
+    def h_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, 0, 0
+    def do_map(b, h, ki, vi, t): return b, h, NT_val - 1 - t, vi
 
     # Output index maps — 5D outputs [B, NT, H, BT, K/V]
     # Outputs are NOT reversed; the kernel writes to NT-1-i_t position
@@ -507,10 +520,11 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
             dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary", "arbitrary"),
             disable_bounds_checks=True,
         ),
-    )(q_t, k_t, v_t, h_bhntKV, do_t, g_gamma)
+    )(q_flat, k_flat, v_flat, h_bhntKV, do_flat, g_gamma)
 
     # MUTATION (eliminate_flip): NO output jnp.flip() — outputs already in correct order
-    # Reshape [B, NT, H, BT, K] -> [B, T, H, K] directly
+    # Use dq_5d/dk_5d/dv_5d directly.
+    # Reshape [B, NT, H, BT, K] -> [B, T, H, K]
     dq = dq_5d.transpose(0, 1, 3, 2, 4).reshape(B, T, H, K)
     dk = dk_5d.transpose(0, 1, 3, 2, 4).reshape(B, T, H, K)
     dv = dv_5d.transpose(0, 1, 3, 2, 4).reshape(B, T, H, V)
@@ -549,12 +563,12 @@ def chunk_gla(q, k, v, g_gamma, scale, chunk_size):
     def _bwd(residuals, do):
         # MUTATION (bf16_residuals): Cast q/k/v back to f32 for backward computation
         q_bf16, k_bf16, v_bf16, h = residuals
-        q_f32 = q_bf16.astype(jnp.float32)
-        k_f32 = k_bf16.astype(jnp.float32)
-        v_f32 = v_bf16.astype(jnp.float32)
+        q = q_bf16.astype(jnp.float32)
+        k = k_bf16.astype(jnp.float32)
+        v = v_bf16.astype(jnp.float32)
         # MUTATION (eliminate_gcumsum + eliminate_flip): backward with reversed index_maps
         dq, dk, dv = chunk_gla_bwd_eliminate_gcumsum(
-            q_f32, k_f32, v_f32, h, do, g_gamma, scale, chunk_size,
+            q, k, v, h, do, g_gamma, scale, chunk_size,
         )
         return dq, dk, dv
 

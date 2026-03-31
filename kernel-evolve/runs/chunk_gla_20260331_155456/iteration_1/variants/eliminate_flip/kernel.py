@@ -468,46 +468,61 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
     saving ~67MB HBM residuals and ~32KB per-chunk bandwidth.
 
     MUTATION (eliminate_flip): ALL jnp.flip() calls removed. Instead of
-    flipping 5 input arrays and 3 output arrays (creating ~460MB of HBM
-    copies), we use reversed BlockSpec index_maps (NT-1-t) so the kernel
-    reads chunks in reverse order directly. The kernel writes to slot
-    NT-1-i_t so outputs land in correct forward order.
+    flipping 5 input arrays and 3 output arrays (creating ~288MB of HBM
+    copies), we flatten NON-flipped chunked arrays and use reversed
+    BlockSpec index_maps (NT_val-1-t) so the kernel reads chunks in
+    reverse order directly. The kernel writes to slot NT-1-i_t so
+    outputs land in correct forward order.
 
     Key differences from baseline:
       1. g_cumsum parameter removed from function signature
-      2. No chunking, flipping, or flattening of q/k/v/do
-      3. Reversed input index_maps: t -> NT-1-t
-      4. Reversed h index_map: t -> NT-1-t
-      5. Kernel writes to NT-1-i_t instead of i_t
-      6. No output flips needed
+      2. All 5 jnp.flip() calls on inputs removed
+      3. All 3 jnp.flip() calls on outputs removed
+      4. Reversed input index_maps: t -> NT_val-1-t
+      5. Reversed h index_map: t -> NT_val-1-t (uses h_bhntKV, not flipped)
+      6. Kernel writes to NT-1-i_t instead of i_t
+      7. dq_5d/dk_5d/dv_5d used directly in final reshape
     """
     BK, BV, BT = 128, 128, chunk_size
     B, T, H, K = q.shape
     V = v.shape[-1]
     NT = T // BT
 
-    # Transpose to (B, H, T, dim) layout — NO chunking, flipping, or flattening
+    # Transpose to (B, H, T, dim) layout
     q_t = jnp.transpose(q, (0, 2, 1, 3))         # [B, H, T, K]
     k_t = jnp.transpose(k, (0, 2, 1, 3))         # [B, H, T, K]
     v_t = jnp.transpose(v, (0, 2, 1, 3))         # [B, H, T, V]
     do_t = jnp.transpose(do, (0, 2, 1, 3))       # [B, H, T, V]
 
-    # h is [B, NT, H, K, V]; transpose to [B, H, NT, K, V] — NO flip
+    # Reshape time into chunks: [B, H, NT, BT, dim]
+    q_chunked = q_t.reshape(B, H, NT, BT, K)
+    k_chunked = k_t.reshape(B, H, NT, BT, K)
+    v_chunked = v_t.reshape(B, H, NT, BT, V)
+    do_chunked = do_t.reshape(B, H, NT, BT, V)
+
+    # h is [B, NT, H, K, V]; transpose to [B, H, NT, K, V]
     h_bhntKV = jnp.transpose(h, (0, 2, 1, 3, 4))  # [B, H, NT, K, V]
+
+    # MUTATION (eliminate_flip): NO jnp.flip() calls — reverse order
+    # is achieved via index_maps that access NT-1-t
+
+    # Flatten NON-flipped chunked arrays to (B, H, NT*BT, dim) for 4D BlockSpec
+    q_flat = q_chunked.reshape(B, H, NT * BT, K)
+    k_flat = k_chunked.reshape(B, H, NT * BT, K)
+    v_flat = v_chunked.reshape(B, H, NT * BT, V)
+    do_flat = do_chunked.reshape(B, H, NT * BT, V)
 
     grid = (B, H, pl.cdiv(K, BK), pl.cdiv(V, BV), NT)
 
-    # MUTATION (eliminate_flip): Reversed input index maps
-    # t -> NT-1-t so i_t=0 reads the LAST original chunk
-    def q_map(b, h, ki, vi, t):  return b, h, NT-1-t, ki
-    def k_map(b, h, ki, vi, t):  return b, h, NT-1-t, ki
-    def v_map(b, h, ki, vi, t):  return b, h, NT-1-t, vi
-    def h_map(b, h, ki, vi, t):  return b, h, NT-1-t, 0, 0
-    def do_map(b, h, ki, vi, t): return b, h, NT-1-t, vi
+    # MUTATION (eliminate_flip): Input index maps access chunks in REVERSE order
+    NT_val = NT  # capture in closure
+    def q_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, ki
+    def k_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, ki
+    def v_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, vi
+    def h_map(b, h, ki, vi, t):  return b, h, NT_val - 1 - t, 0, 0
+    def do_map(b, h, ki, vi, t): return b, h, NT_val - 1 - t, vi
 
     # Output index maps — 5D outputs [B, NT, H, BT, K/V]
-    # The kernel writes to slot NT-1-i_t internally, so the output
-    # BlockSpec just needs to map to the correct (b, h) slice
     def out_k_map(b, h, ki, vi, t): return b, 0, h, 0, 0
     def out_v_map(b, h, ki, vi, t): return b, 0, h, 0, 0
 
@@ -524,7 +539,7 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
                 pl.BlockSpec((1, 1, BT, BK), k_map),        # k: 4D
                 pl.BlockSpec((1, 1, BT, BV), v_map),        # v: 4D
                 # MUTATION (eliminate_gcumsum): g_ref REMOVED from in_specs
-                pl.BlockSpec((1, 1, 1, BK, BV), h_map),     # h: 5D
+                pl.BlockSpec((1, 1, 1, BK, BV), h_map),     # h: 5D (non-flipped)
                 pl.BlockSpec((1, 1, BT, BV), do_map),       # do: 4D
                 pl.BlockSpec(memory_space=pltpu.SMEM),       # g_gamma
             ],
@@ -544,7 +559,7 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
             dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary", "arbitrary"),
             disable_bounds_checks=True,
         ),
-    )(q_t, k_t, v_t, h_bhntKV, do_t, g_gamma)
+    )(q_flat, k_flat, v_flat, h_bhntKV, do_flat, g_gamma)
 
     # MUTATION (eliminate_flip): No output flips needed — kernel writes
     # to NT-1-i_t slots so outputs are already in correct forward order.

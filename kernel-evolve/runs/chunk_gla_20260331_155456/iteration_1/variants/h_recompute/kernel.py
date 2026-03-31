@@ -62,10 +62,6 @@ def exp(x):
 #
 # VMEM scratch holds h state [BK, BV] in float32 across time steps.
 #
-# MUTATION (reduce_hbm): h is NO LONGER saved to h_ref output.
-# Instead, h is recomputed in the backward pass via _h_only_kernel,
-# saving ~32MB HBM from residuals.
-#
 # For target shape K=128=BK, V=128=BV, the grid is (2, 16, 1, 1, 64).
 # Each tile sees the full h, so no cross-tile reduction is needed.
 # ============================================================
@@ -160,17 +156,14 @@ def chunk_fwd_combined(q, k, v, g_gamma, scale, chunk_size):
     with a single pallas_call. The h tensor stays in VMEM scratch instead
     of making an HBM round-trip between two separate kernels.
 
-    MUTATION (reduce_hbm): h is still computed but NOT returned.
-    Only o is returned; h is recomputed in backward via recompute_h().
-
-    Returns o where o is [B, H, T, V] (transposed layout).
+    Returns (h, o) where h is [B, NT, H, K, V] for backward residuals.
     """
     BK, BV, BT = 128, 128, chunk_size
     B, T, H, K_dim = q.shape
     V = v.shape[-1]
     NT = T // BT
 
-    # Layout: (B, H, T, dim) -- time axis will be "arbitrary"
+    # Layout: (B, H, T, dim) — time axis will be "arbitrary"
     q_t = jnp.transpose(q, (0, 2, 1, 3))   # [B, H, T, K]
     k_t = jnp.transpose(k, (0, 2, 1, 3))   # [B, H, T, K]
     v_t = jnp.transpose(v, (0, 2, 1, 3))   # [B, H, T, V]
@@ -214,9 +207,7 @@ def chunk_fwd_combined(q, k, v, g_gamma, scale, chunk_size):
     # o_t is [B, H, T, V], need to transpose to [B, T, H, V]
     o = jnp.transpose(o_t, (0, 2, 1, 3))   # [B, T, H, V]
 
-    # MUTATION (reduce_hbm): Discard h_all, only return o.
-    # h will be recomputed in the backward pass via recompute_h().
-    return o
+    return h_all, o
 
 
 # ============================================================
@@ -277,9 +268,6 @@ def chunk_gla_fwd_intra_gk(q, k, g_cumsum, scale, chunk_size):
 # MUTATION (eliminate_gcumsum): g_cumsum is no longer computed or
 # stored as a residual. The backward kernel recomputes gating
 # from the g_gamma scalar directly, saving ~67MB HBM.
-#
-# MUTATION (reduce_hbm): h is no longer returned from forward.
-# Only o is returned. h is recomputed in backward via recompute_h().
 # ============================================================
 
 
@@ -288,100 +276,34 @@ def chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size):
 
     MUTATION (eliminate_gcumsum): g_cumsum removed from residuals.
     The backward kernel reconstructs gating from g_gamma scalar.
-
-    MUTATION (reduce_hbm): h removed from return value.
-    Returns only o. h is recomputed in backward.
     """
     B, T, H, K = q.shape
     V = v.shape[-1]
     C = chunk_size
 
-    # MUTATION (fuse_fwd_combined + reduce_hbm): Single pallas_call for
-    # h propagation and output computation; h discarded to save HBM.
-    o = chunk_fwd_combined(q, k, v, g_gamma, scale, C)
+    # MUTATION (fuse_fwd_combined): Single pallas_call for both
+    # h propagation and output computation
+    h, o = chunk_fwd_combined(q, k, v, g_gamma, scale, C)
 
-    return o
+    return h, o
 
 
 # ============================================================
-# h-only recomputation kernel
+# h recomputation helper
 #
-# MUTATION (reduce_hbm): Recomputes h from k, v, g_gamma for the
-# backward pass instead of storing h as a forward residual.
-# This saves ~32MB HBM (B*NT*H*K*V * dtype_size).
-#
-# This kernel runs the same h-update recurrence as the forward
-# combined kernel but skips the output computation entirely:
-#   h[t+1] = h[t] * exp(g_gamma * BT) + k.T @ (v * exp(g_gamma*BT - g_ramp))
+# MUTATION (h_recompute): Instead of storing h as a residual
+# (which costs ~32MB HBM), recompute it in backward by calling
+# the existing chunk_fwd_combined and returning only h.
 # ============================================================
 
 
-def _h_only_kernel(k_ref, v_ref, g_gamma, h_ref, scratch_ref, *, BT, NT):
-    BK = k_ref.shape[3]
-    BV = v_ref.shape[3]
-    i_b, i_h, i_k, i_v, i_t = (
-        pl.program_id(0), pl.program_id(1), pl.program_id(2),
-        pl.program_id(3), pl.program_id(4),
-    )
-    b_g_last = g_gamma[i_h] * BT
-    b_g_ramp = g_gamma[i_h].astype(jnp.float32) * (jnp.arange(0, BT) + 1)
+def recompute_h(q, k, v, g_gamma, scale, chunk_size):
+    """Recompute h from inputs using the forward combined kernel.
 
-    @pl.when(i_t == 0)
-    def init():
-        scratch_ref[:, :] = jnp.zeros((BK, BV), dtype=jnp.float32)
-
-    h_ref[0, i_t, 0] = scratch_ref[...]
-
-    b_k = k_ref[0, 0]
-    b_v = v_ref[0, 0]
-    scratch_ref[...] *= exp(b_g_last)
-    v_gated = (b_v * jnp.exp(b_g_last - b_g_ramp)[:, None]).astype(b_v.dtype)
-    scratch_ref[...] = scratch_ref[...] + jax.lax.dot(
-        b_k.astype(jnp.float32).T,
-        v_gated.astype(jnp.float32),
-        precision=lax.Precision.HIGHEST,
-        preferred_element_type=jnp.float32,
-    )
-
-
-def recompute_h(k, v, g_gamma, chunk_size):
-    """Recompute h states from k, v, g_gamma for backward pass.
-
-    MUTATION (reduce_hbm): Instead of storing h [B, NT, H, K, V] as a
-    forward residual (~32MB), recompute it here during backward.
-    This trades compute for memory, reducing peak HBM usage.
-
-    Returns h_all: [B, NT, H, K_dim, V]
+    This avoids storing h as a residual, saving ~32MB HBM.
     """
-    BK, BV, BT = 128, 128, chunk_size
-    B, T, H, K_dim = k.shape
-    V = v.shape[-1]
-    NT = T // BT
-    k_t = jnp.transpose(k, (0, 2, 1, 3))
-    v_t = jnp.transpose(v, (0, 2, 1, 3))
-    grid = (B, H, pl.cdiv(K_dim, BK), pl.cdiv(V, BV), NT)
-    def k_map(b, h, ki, vi, t): return b, h, t, ki
-    def v_map(b, h, ki, vi, t): return b, h, t, vi
-    def h_map(b, h, ki, vi, t): return b, 0, h, ki, vi
-    h_all = pl.pallas_call(
-        functools.partial(_h_only_kernel, BT=BT, NT=NT),
-        grid_spec=pltpu.PrefetchScalarGridSpec(
-            num_scalar_prefetch=0, grid=grid,
-            in_specs=[
-                pl.BlockSpec((1, 1, BT, BK), k_map),
-                pl.BlockSpec((1, 1, BT, BV), v_map),
-                pl.BlockSpec(memory_space=pltpu.SMEM),
-            ],
-            out_specs=[pl.BlockSpec((1, NT, 1, BK, BV), h_map)],
-            scratch_shapes=[pltpu.VMEM((BK, BV), jnp.float32)],
-        ),
-        out_shape=[jax.ShapeDtypeStruct((B, NT, H, K_dim, V), k.dtype)],
-        compiler_params=pltpu.CompilerParams(
-            dimension_semantics=("parallel", "parallel", "arbitrary", "arbitrary", "arbitrary"),
-            disable_bounds_checks=True,
-        ),
-    )(k_t, v_t, g_gamma)
-    return h_all
+    h, _ = chunk_fwd_combined(q, k, v, g_gamma, scale, chunk_size)
+    return h
 
 
 # ============================================================
@@ -586,7 +508,7 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
     h_flipped = jnp.flip(h_bhntKV, axis=2)    # [B, H, NT, K, V]
 
     # Flatten q/k/v/do back to (B, H, NT*BT, dim) for standard 4D BlockSpec
-    # MUTATION (eliminate_gcumsum): g_flat removed -- no longer needed
+    # MUTATION (eliminate_gcumsum): g_flat removed — no longer needed
     q_flat = q_flipped.reshape(B, H, NT * BT, K)
     k_flat = k_flipped.reshape(B, H, NT * BT, K)
     v_flat = v_flipped.reshape(B, H, NT * BT, V)
@@ -601,7 +523,7 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
     def h_map(b, h, ki, vi, t):  return b, h, t, 0, 0
     def do_map(b, h, ki, vi, t): return b, h, t, vi
 
-    # Output index maps -- 5D outputs [B, NT, H, BT, K/V]
+    # Output index maps — 5D outputs [B, NT, H, BT, K/V]
     def out_k_map(b, h, ki, vi, t): return b, 0, h, 0, 0
     def out_v_map(b, h, ki, vi, t): return b, 0, h, 0, 0
 
@@ -657,15 +579,14 @@ def chunk_gla_bwd_eliminate_gcumsum(q, k, v, h, do, g_gamma, scale, chunk_size):
 # ============================================================
 # custom_vjp wrapper
 #
+# MUTATION (h_recompute):
+#   _fwd: No longer stores h in residuals (saves ~32MB HBM)
+#   _bwd: Recomputes h by calling recompute_h() before backward kernel
+#
 # MUTATION (eliminate_gcumsum):
-#   _fwd: No longer computes or stores g_cumsum in residuals
 #   _bwd: Calls chunk_gla_bwd_eliminate_gcumsum (no g_cumsum input)
 #
-# MUTATION (reduce_hbm):
-#   _fwd: No longer stores h in residuals (saves ~32MB HBM)
-#   _bwd: Recomputes h via recompute_h() before calling backward kernel
-#
-# Total pallas_calls: 3 (fwd_combined + h_recompute + bwd)
+# Total pallas_calls: 3 (1 fwd + 1 h recompute + 1 bwd)
 # ============================================================
 
 
@@ -673,18 +594,21 @@ def chunk_gla(q, k, v, g_gamma, scale, chunk_size):
     """Chunked GLA with custom_vjp (Pallas TPU kernels)."""
     @jax.custom_vjp
     def _compute(q, k, v):
-        o = chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size)
+        _, o = chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size)
         return o
 
     def _fwd(q, k, v):
-        # MUTATION (reduce_hbm): h removed from residuals
-        o = chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size)
-        return o, (q, k, v)  # h removed from residuals
+        # MUTATION (h_recompute): h discarded from residuals to save ~32MB HBM
+        _, o = chunk_gla_fwd(q, k, v, g_gamma, scale, chunk_size)
+        return o, (q, k, v)
 
     def _bwd(residuals, do):
-        # MUTATION (reduce_hbm): recompute h from k, v, g_gamma
+        # MUTATION (h_recompute): Recompute h from inputs instead of loading
+        # from residuals. Trades compute for ~32MB HBM savings.
+        # MUTATION (eliminate_gcumsum): g_cumsum removed from residuals,
+        # backward kernel recomputes gating from g_gamma scalar
         q, k, v = residuals
-        h = recompute_h(k, v, g_gamma, chunk_size)
+        h = recompute_h(q, k, v, g_gamma, scale, chunk_size)
         dq, dk, dv = chunk_gla_bwd_eliminate_gcumsum(
             q, k, v, h, do, g_gamma, scale, chunk_size,
         )
