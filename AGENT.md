@@ -421,6 +421,33 @@
 - **Fix**: Stop targeting register pressure reduction as primary optimization direction when the kernel is at ~9x or higher. Future optimization should focus on: (1) MXU pipeline efficiency, (2) algorithmic restructuring to reduce total matmul count, (3) reducing total VLIW bundle count through simplification. Register pressure reduction only helps when it does NOT add HBM traffic or disrupt MXU scheduling.
 - **First seen**: 2026-03-31, chunk_gla optimization round 8
 
+### [FP35] Separate-kernel h recomputation causes 28% speed regression — activation checkpointing needs fusion
+- **Symptom**: Adding a separate `pallas_call` to recompute h in backward (instead of storing h as residual) caused 27.6% speed regression (9.066x → 6.567x), far exceeding the estimated ~10% cost of additional forward compute.
+- **Root cause**: The recomputation runs as a separate pallas_call (`_h_only_kernel` + `recompute_h`), adding full kernel launch overhead, DMA transfers, and JIT compilation. This is the same pattern as FP20 (kernel splitting overhead exceeds per-kernel savings). The h recomputation effectively re-runs the forward h propagation loop — 64 sequential iterations through the "arbitrary" time dimension — which is computationally expensive even within a single pallas_call.
+- **Fix**: Activation checkpointing (h recomputation) for chunk_gla is only viable if the recomputation is FUSED into the backward kernel — not as a separate pallas_call. The backward kernel already iterates through the time dimension; h could potentially be recomputed on-the-fly during the backward scan. However, this adds significant complexity and register pressure to an already complex kernel (~9400 VLIW bundles).
+- **Extends**: FP20 (kernel splitting overhead), SO14 (pallas_call eliminates dispatch overhead)
+- **First seen**: 2026-03-31, chunk_gla HBM reduction session, round 1
+
+### [FP36] Combining independent HBM optimizations can have interaction penalties
+- **Symptom**: bf16 residuals (-0.09% speed) + flip elimination (-0.57% speed) = expected -0.66%, but combined variant (reverse_indexing) was -1.07%. The interaction penalty is ~0.4%.
+- **Root cause**: When bf16→f32 casts happen inside a reverse-indexed backward kernel, the compiler may generate slightly different scheduling than when the cast and index reversal are applied independently. The combined code path has both wrapper-level changes (bf16 residual casts) and kernel-level changes (reversed index_maps), which interact through the compilation pipeline.
+- **Fix**: When combining multiple HBM reduction techniques, test the combination explicitly — do not assume additive cost. The interaction may be small (0.4% here) but should be measured. Prefer applying techniques sequentially (one per round) to isolate effects.
+- **First seen**: 2026-03-31, chunk_gla HBM reduction session, round 1
+
+### SO17: bf16 residual storage — 43% residual memory reduction at zero speed cost
+- **What**: Store q/k/v residuals as bf16 (instead of f32) in the custom_vjp _fwd function. Cast back to f32 at the start of _bwd. Only the wrapper code changes — kernel code is unchanged.
+- **Impact**: Residuals 224MB → 128MB (-43%). Speed: 9.066x → 9.058x (-0.09%, within measurement noise).
+- **Why it works**: TPU v7x VPU handles bf16→f32 cast as a single-cycle element-wise extension, essentially free. The residuals (q, k, v) are already computed in f32 in the forward kernel; storing as bf16 halves their HBM footprint without affecting kernel compilation. The cast in backward adds negligible overhead because it's a simple type widening before the kernel launch.
+- **Applicable when**: Forward-to-backward residuals are stored at f32 but the kernel's internal precision is already bf16 or the atol is large enough to tolerate bf16 truncation in residuals.
+- **First seen**: 2026-03-31, chunk_gla HBM reduction session, round 1
+
+### SO18: Flip elimination via reversed BlockSpec index_maps — 288MB temp reduction at 0.6% speed cost
+- **What**: Replace jnp.flip() calls in the backward pass wrapper with reversed BlockSpec index_maps that use `(NT-1-t)` mapping. The kernel writes outputs to `(NT-1-i_t)` positions instead of pre-flipping input arrays. Eliminates 5 jnp.flip() calls that each create a full HBM temporary copy.
+- **Impact**: ~288MB peak HBM reduction (no temporary flip copies). Speed: 9.066x → 9.014x (-0.57%). VLIW bundles: 9332 → 9348 (+16, negligible).
+- **Why it works**: jnp.flip() creates a new array in HBM as a reversed copy. By using reversed index_maps in BlockSpec, the Pallas kernel reads/writes tiles in reverse order directly from the original (non-flipped) array. The address computation adds minimal overhead (+16 VLIW bundles from the NT-1-t index calculation).
+- **Applicable when**: A backward pass pre-flips arrays to implement a reverse scan. The flip can be replaced with reversed BlockSpec index_maps as long as the kernel correctly handles the reversed tile ordering.
+- **First seen**: 2026-03-31, chunk_gla HBM reduction session, round 1
+
 ### SO11: Eliminating separate pallas_call via input recomputation (1.097x speedup — first to beat reference)
 - **What**: Removed the `a_ref` input from the fused backward kernel and eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call that computed the A matrix. Instead, recompute A inside the backward kernel as `b_a = dot(q_pos, k_neg.T) * scale` using already-available q and k tiles.
 - **Why**: The separate pallas_call for A computation had its own compilation, launch overhead, DMA transfers (A tiles from HBM), and register allocation. By recomputing A inside the backward kernel (just 1 extra dot product), all of that overhead is eliminated: 27 fewer computation events (-10%), 2 fewer DMA transfers (-8%), and no HBM round-trip for A.
