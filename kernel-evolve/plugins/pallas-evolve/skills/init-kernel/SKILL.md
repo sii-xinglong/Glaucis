@@ -244,7 +244,6 @@ The EVOLVE-BLOCK boundary determines what the optimizer can change. **Incorrect 
 - All `import` statements
 - `_make_test_data()` function
 - Constants and configuration values
-- `optimized_compute` function signature (the `def` line with parameters)
 
 **INSIDE the EVOLVE-BLOCK** (mutable — optimizer will modify):
 - Pallas kernel functions (`def kernel_body(...)`, etc.)
@@ -252,7 +251,7 @@ The EVOLVE-BLOCK boundary determines what the optimizer can change. **Incorrect 
 - Tiling parameters, block sizes
 - Memory layout and transpose strategies
 - Loop structures and pipelining
-- The body of `optimized_compute` (but NOT its signature)
+- `optimized_compute` function (signature and body — the optimizer may adjust how it orchestrates the Pallas calls)
 
 ### Template file structure
 
