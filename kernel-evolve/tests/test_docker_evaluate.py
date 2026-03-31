@@ -172,3 +172,121 @@ def test_batch_dispatch_handles_timeout():
   parsed = json.loads(results[0].split("EVAL_RESULT:", 1)[1])
   assert parsed["status"] == "COMPILE_ERROR"
   assert "timeout" in parsed["error"].lower()
+
+
+# ── xprof extraction helper tests ──
+
+
+def test_is_computation_event_matches():
+  evaluate = _load_evaluate_module()
+  assert evaluate._is_computation_event({"name": "jit_computation.123"}) is True
+  assert evaluate._is_computation_event({"name": "jit(fn)"}) is True
+  assert evaluate._is_computation_event({"name": "pallas_call"}) is True
+  assert evaluate._is_computation_event({"name": "PALLAS_tpu"}) is True
+
+
+def test_is_computation_event_rejects():
+  evaluate = _load_evaluate_module()
+  assert evaluate._is_computation_event({"name": "SyncWait"}) is False
+  assert evaluate._is_computation_event({"name": "idle"}) is False
+  assert evaluate._is_computation_event({}) is False
+  assert evaluate._is_computation_event({"name": ""}) is False
+
+
+def test_cluster_by_gap_basic():
+  """5 events with 4 clear gaps should produce 5 clusters of 1 event each."""
+  evaluate = _load_evaluate_module()
+  events = [
+    {"ts": 0, "dur": 10},
+    {"ts": 1000, "dur": 10},
+    {"ts": 2000, "dur": 10},
+    {"ts": 3000, "dur": 10},
+    {"ts": 4000, "dur": 10},
+  ]
+  clusters = evaluate._cluster_by_gap(events, 5)
+  assert clusters is not None
+  assert len(clusters) == 5
+  assert all(len(c) == 1 for c in clusters)
+
+
+def test_cluster_by_gap_groups_close_events():
+  """Events close together should be grouped; large gaps separate iterations."""
+  evaluate = _load_evaluate_module()
+  # 2 iterations, each with 3 closely-spaced events, big gap between iterations
+  events = [
+    {"ts": 0, "dur": 5},
+    {"ts": 10, "dur": 5},
+    {"ts": 20, "dur": 5},
+    # gap of 9975
+    {"ts": 10000, "dur": 5},
+    {"ts": 10010, "dur": 5},
+    {"ts": 10020, "dur": 5},
+  ]
+  clusters = evaluate._cluster_by_gap(events, 2)
+  assert clusters is not None
+  assert len(clusters) == 2
+  assert len(clusters[0]) == 3
+  assert len(clusters[1]) == 3
+
+
+def test_cluster_by_gap_too_few_events():
+  evaluate = _load_evaluate_module()
+  events = [{"ts": 0, "dur": 10}]
+  assert evaluate._cluster_by_gap(events, 5) is None
+
+
+def test_cluster_by_gap_empty():
+  evaluate = _load_evaluate_module()
+  assert evaluate._cluster_by_gap([], 3) is None
+
+
+def test_extract_iteration_times_basic():
+  """Should extract per-iteration times from well-separated computation events."""
+  evaluate = _load_evaluate_module()
+  tpu_pid = 42
+  events = []
+  for i in range(3):
+    # Each iteration: one computation event of 500us, separated by 10000us gaps
+    events.append({
+      "pid": tpu_pid,
+      "ts": i * 10000,
+      "dur": 500,
+      "name": "jit_computation.fn",
+    })
+  times = evaluate._extract_iteration_times(events, tpu_pid, n_iters=3)
+  assert times is not None
+  assert len(times) == 3
+  assert all(abs(t - 0.5) < 0.01 for t in times)  # 500us = 0.5ms
+
+
+def test_extract_iteration_times_wrong_pid():
+  evaluate = _load_evaluate_module()
+  events = [{"pid": 99, "ts": 0, "dur": 100, "name": "jit_computation.fn"}]
+  assert evaluate._extract_iteration_times(events, tpu_pid=42, n_iters=1) is None
+
+
+def test_extract_iteration_times_no_computation_events():
+  evaluate = _load_evaluate_module()
+  events = [{"pid": 42, "ts": 0, "dur": 100, "name": "SyncWait"}]
+  assert evaluate._extract_iteration_times(events, tpu_pid=42, n_iters=1) is None
+
+
+def test_extract_iteration_times_multi_event_iterations():
+  """Each iteration may have multiple computation events."""
+  evaluate = _load_evaluate_module()
+  tpu_pid = 1
+  # 2 iterations, each with 2 events, gap between iterations is large
+  events = [
+    # Iteration 1
+    {"pid": tpu_pid, "ts": 0, "dur": 200, "name": "jit_computation.a"},
+    {"pid": tpu_pid, "ts": 300, "dur": 200, "name": "pallas_call"},
+    # Iteration 2 (gap of 9500)
+    {"pid": tpu_pid, "ts": 10000, "dur": 200, "name": "jit_computation.a"},
+    {"pid": tpu_pid, "ts": 10300, "dur": 200, "name": "pallas_call"},
+  ]
+  times = evaluate._extract_iteration_times(events, tpu_pid, n_iters=2)
+  assert times is not None
+  assert len(times) == 2
+  # Each iteration spans from ts=0,dur=200 to ts=300+200=500 => 500us = 0.5ms
+  assert abs(times[0] - 0.5) < 0.01
+  assert abs(times[1] - 0.5) < 0.01
