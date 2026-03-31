@@ -1,4 +1,7 @@
-"""Four-stage kernel evaluator for TPU. Runs inside a K8s Pod."""
+"""Three-stage kernel evaluator for TPU. Runs inside a K8s Pod.
+
+Stages: compile -> correctness -> benchmark (+ optional deep profile).
+"""
 
 import argparse
 import base64
@@ -13,6 +16,8 @@ try:
   from google.cloud import storage
 except ImportError:
   storage = None
+
+from pathlib import Path
 
 import numpy as np
 
@@ -240,7 +245,6 @@ def stage_benchmark(exec_globals, shapes, trace_dir="/tmp/xplane_trace", warmup=
         out.block_until_ready()
 
     # ── Step 5: Profiled execution with wallclock fallback ──
-    from pathlib import Path
     Path(trace_dir).mkdir(parents=True, exist_ok=True)
 
     wallclock_times = []
@@ -330,10 +334,11 @@ def stage_benchmark(exec_globals, shapes, trace_dir="/tmp/xplane_trace", warmup=
               timing_source = "xprof_clustered"
             else:
               # Fallback 2: average from trace window
-              comp_events = [
-                e for e in events
-                if e.get("pid") == tpu_pid and "dur" in e and _is_computation_event(e)
-              ]
+              comp_events = sorted(
+                [e for e in events
+                 if e.get("pid") == tpu_pid and "dur" in e and _is_computation_event(e)],
+                key=lambda e: e["ts"],
+              )
               if comp_events:
                 trace_start = comp_events[0]["ts"]
                 trace_end = comp_events[-1]["ts"] + comp_events[-1]["dur"]
@@ -392,6 +397,7 @@ def stage_benchmark(exec_globals, shapes, trace_dir="/tmp/xplane_trace", warmup=
           traceback.print_exc(file=sys.stderr)
 
     # ── Step 7: Build result ──
+    # Local import: kernel_evolve may not be on PYTHONPATH during module load in Docker
     from kernel_evolve.evaluator import BenchmarkData
 
     benchmark = BenchmarkData(
@@ -486,7 +492,6 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       dump_dir = _get_dump_dir()
     import glob
     import re
-    from pathlib import Path
 
     _DTYPE_BYTES = {
       "f32": 4,
