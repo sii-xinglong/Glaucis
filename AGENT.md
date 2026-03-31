@@ -333,6 +333,7 @@
 - **Fix**: Either (a) keep all matmul operands in float32 with HIGHEST precision, or (b) cast both operands to bf16 AND remove/lower the precision parameter to `lax.Precision.DEFAULT`. Cannot have bf16 inputs AND HIGHEST precision simultaneously.
 - **First seen**: 2026-03-30, chunk_gla optimization round 4
 - **Extended**: 2026-03-30, chunk_gla round 5 (L2_bf16_uniform confirmed bf16+HIGHEST constraint)
+- **Extended**: 2026-03-31, chunk_gla round 10 — bf16 residual storage (q, k, do arrays stored as bf16 between forward and backward) triggers FP25 when backward kernel uses `.astype(b_v.dtype)` / `.astype(b_q.dtype)` intermediate casts that propagate bf16 to HIGHEST-precision matmuls. Fix: replace ALL intermediate casts with explicit `.astype(jnp.float32)` before `jnp.dot(..., precision=HIGHEST)`. 3 of 5 R10 variants hit this.
 
 ### [FP26] PrefetchScalarGridSpec index_map must accept all non-scalar grid dimensions
 - **Symptom**: `TypeError: kqg_map() takes 3 positional arguments but 4 were given` when using `PrefetchScalarGridSpec` with grid `(B, H, 1, 1, NT)` and `num_scalar_prefetch=1`.
@@ -443,7 +444,11 @@
 - **Rule**: Forward-to-backward residuals that are point-in-time snapshots consumed without accumulation can safely use bf16 storage. Residuals that feed into sequential state accumulation MUST stay f32 (see FP35).
 - **First seen**: 2026-03-31, chunk_gla optimization round 9
 
-### SO11: Eliminating separate pallas_call via input recomputation (1.097x speedup — first to beat reference)
+### [FP37] Intermediate dtype casts are normalized by Mosaic compiler — removing them has zero effect
+- **Symptom**: Removing `.astype(b_v.dtype)` intermediate bf16 casts in the forward kernel (when followed by f32 casts/matmuls) produces an IDENTICAL compiled kernel: same VLIW bundles (9252), MXU ops (5430), register spills (2,503,044), fills (3,198,000).
+- **Root cause**: The Mosaic compiler performs dead-cast elimination. When a bf16 cast is immediately followed by an f32 cast or consumed by an f32 matmul, the compiler removes the redundant bf16 cast entirely. The compiled TPU kernel is identical regardless of whether intermediate casts are present in the source.
+- **Fix**: Do NOT waste optimization effort on removing intermediate dtype casts in Pallas kernel source. The compiler handles this automatically. Focus on changes that affect the dataflow graph (different operations, different array dimensions) rather than cosmetic cast cleanup.
+- **First seen**: 2026-03-31, chunk_gla optimization round 10 (L2_fwd_skip_v_gated_cast confirmed identical output)
 - **What**: Removed the `a_ref` input from the fused backward kernel and eliminated the separate `chunk_gla_fwd_intra_gk` pallas_call that computed the A matrix. Instead, recompute A inside the backward kernel as `b_a = dot(q_pos, k_neg.T) * scale` using already-available q and k tiles.
 - **Why**: The separate pallas_call for A computation had its own compilation, launch overhead, DMA transfers (A tiles from HBM), and register allocation. By recomputing A inside the backward kernel (just 1 extra dot product), all of that overhead is eliminated: 27 fewer computation events (-10%), 2 fewer DMA transfers (-8%), and no HBM round-trip for A.
 - **Impact**: 0.876x → 1.097x (+25.2%). First variant to beat the JAX reference. Despite register spills INCREASING 24% (1.96M → 2.44M), the kernel launch overhead savings dominate.
