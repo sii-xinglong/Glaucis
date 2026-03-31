@@ -93,6 +93,7 @@ class EvalRequest:
   shapes: list[dict[str, Any]]
   rtol: float = 1e-2
   atol: float = 1e-2
+  metadata: dict[str, Any] = field(default_factory=dict)
 
   def to_dict(self) -> dict[str, Any]:
     return {
@@ -102,6 +103,7 @@ class EvalRequest:
       "shapes": self.shapes,
       "rtol": self.rtol,
       "atol": self.atol,
+      "metadata": self.metadata,
     }
 
   def encode_b64(self) -> str:
@@ -109,7 +111,15 @@ class EvalRequest:
 
   @classmethod
   def from_dict(cls, data: dict[str, Any]) -> EvalRequest:
-    return cls(**data)
+    return cls(
+      variant_id=data["variant_id"],
+      kernel_code=data["kernel_code"],
+      reference_code=data["reference_code"],
+      shapes=data["shapes"],
+      rtol=data.get("rtol", 1e-2),
+      atol=data.get("atol", 1e-2),
+      metadata=data.get("metadata", {}),
+    )
 
   @classmethod
   def decode_b64(cls, encoded: str) -> EvalRequest:
