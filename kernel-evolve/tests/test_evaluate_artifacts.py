@@ -263,7 +263,7 @@ def test_upload_to_gcs_empty_artifacts():
 
 def test_main_collects_artifacts_for_upload():
   """Verify the artifact collection logic from stage results."""
-  profile_result = {
+  bench_result = {
     "ok": True,
     "compute_ratio": 0.85,
     "memory_transfer_ratio": 0.15,
@@ -278,8 +278,8 @@ def test_main_collects_artifacts_for_upload():
   }
 
   artifacts = {}
-  if profile_result.get("ok"):
-    trace_path = profile_result.get("_trace_events_path")
+  if bench_result.get("ok"):
+    trace_path = bench_result.get("_trace_events_path")
     if trace_path:
       artifacts["trace_events.json"] = trace_path
   if deep_profile.get("ok"):
