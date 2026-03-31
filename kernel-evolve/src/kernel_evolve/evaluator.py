@@ -1,4 +1,4 @@
-"""Four-stage evaluation pipeline: compile -> correctness -> performance -> profile."""
+"""Evaluation pipeline: compile -> correctness -> benchmark (+ optional deep profile)."""
 
 from __future__ import annotations
 
