@@ -105,6 +105,17 @@ Kernel evaluation runs on TPU via GitHub Actions. The engine:
 
 The workflow template is at [`.github/workflows/kernel-eval.yaml`](.github/workflows/kernel-eval.yaml). The evaluation container is at [`docker/`](docker/).
 
+## Claude Code Skills
+
+The pallas-evolve skills are bundled as a local Claude Code plugin. When you open this repo in Claude Code for the first time, you'll be prompted to trust the plugin. After that, invoke skills with:
+
+```
+/pallas-evolve:start <config.yaml>    # Start an optimization session
+/pallas-evolve:submit                  # Submit variants for TPU evaluation
+/pallas-evolve:analyze                 # Analyze evaluation results
+/pallas-evolve:reflect                 # Record learnings to AGENT.md
+```
+
 ## Output
 
 ```
