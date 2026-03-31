@@ -1,1 +1,50 @@
-{"lineages": [], "pruned": [], "round": 0}
+{
+  "round": 1,
+  "config": {
+    "top_k": 2,
+    "max_active_lineages": 4
+  },
+  "lineages": [
+    {
+      "id": "L1",
+      "parent": null,
+      "best_speedup": 9.058,
+      "best_kernel": "iteration_1/variants/bf16_residuals/kernel.py",
+      "direction": "bf16_residual_precision",
+      "history": ["iter-1-bf16_residuals"],
+      "stagnant_rounds": 0
+    },
+    {
+      "id": "L2",
+      "parent": null,
+      "best_speedup": 9.014,
+      "best_kernel": "iteration_1/variants/eliminate_flip/kernel.py",
+      "direction": "flip_elimination",
+      "history": ["iter-1-eliminate_flip"],
+      "stagnant_rounds": 0
+    }
+  ],
+  "pruned": [
+    {
+      "id": "R1_reverse_indexing",
+      "best_speedup": 8.969,
+      "direction": "combined_bf16_flip",
+      "pruned_at_round": 1,
+      "reason": "below_top_k_combined_approach_covered_by_L1_L2"
+    },
+    {
+      "id": "R1_h_recompute",
+      "best_speedup": 6.567,
+      "direction": "activation_recomputation",
+      "pruned_at_round": 1,
+      "reason": "speed_regression_27.6%_not_viable"
+    },
+    {
+      "id": "R1_activation_checkpoint",
+      "best_speedup": 6.389,
+      "direction": "aggressive_checkpoint",
+      "pruned_at_round": 1,
+      "reason": "speed_regression_29.5%_not_viable"
+    }
+  ]
+}
