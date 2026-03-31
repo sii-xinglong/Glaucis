@@ -96,7 +96,7 @@ Only supports simple scalar assignments (e.g., `BLOCK_K = 128`). Complex express
 
 For each param name and value in the config:
 1. Determine marker: `params[name].marker` or `f"{name} ="`.
-2. Use regex `r"({marker}\s*)(\d+(?:\.\d+)?)"` to find a simple scalar assignment.
+2. Escape marker for regex with `re.escape(marker)`, then use pattern `r"({escaped_marker}\s*)(\d+(?:\.\d+)?)"` to find a simple scalar assignment.
 3. Replace the value portion with the new value.
 4. If marker not found: log warning, skip this param.
 5. If marker found multiple times: raise error (ambiguous).
@@ -131,9 +131,9 @@ No new sidecar files or delivery mechanisms are needed — the existing payload 
 ### Analysis Grouping
 
 The ANALYZE phase:
-1. Groups `EvalResult`s by `code_variant_id`.
+1. Groups `EvalResult`s by `metadata["code_variant_id"]`.
 2. For each code variant, identifies the tiling config with the best speedup.
-3. Reports **tiling sensitivity**: max speedup / min speedup across configs (indicates how much tiling matters for this variant).
+3. Reports **tiling sensitivity**: max speedup / min speedup across *successful* configs only (configs with COMPILE_ERROR or INCORRECT are excluded from this ratio to avoid division by zero).
 4. Scores each code variant by its **best** tiling result, not its default.
 5. Records the winning (code, tiling) pair in lineage tracking.
 
@@ -168,12 +168,32 @@ Add `tuning_params: TuningConfig | None = None` to `EvolveConfig`.
 
 ### `evaluator.py`
 
-`EvalRequest` and `EvalResult` are `@dataclass` classes (not Pydantic). Both already have a `metadata: dict[str, Any]` field. Rather than adding a new field, carry `tuning_config` inside `metadata`:
+`EvalRequest` currently has no `metadata` field. Add one:
 
+```python
+@dataclass
+class EvalRequest:
+  variant_id: str
+  kernel_code: str
+  reference_code: str
+  shapes: list[dict[str, Any]]
+  rtol: float = 1e-2
+  atol: float = 1e-2
+  metadata: dict[str, Any] = field(default_factory=dict)  # NEW
+```
+
+**Serialization changes required:**
+- `to_dict()`: add `"metadata": self.metadata`
+- `from_dict()`: add `metadata=data.get("metadata", {})` (backward compatible — missing key defaults to `{}`)
+- `encode_b64()` / `decode_b64()`: no changes needed (they delegate to `to_dict()`/`from_dict()`)
+
+`BatchEvalRequest.variants` is currently `list[dict[str, str]]` (string values). Change to `list[dict[str, Any]]` to support the nested `metadata` dict. Update `to_single_requests()` to pass `metadata=v.get("metadata", {})`.
+
+`EvalResult` already has a `metadata: dict[str, Any]` field — no changes needed on the result side.
+
+**Data flow:**
 - On request: `metadata["tuning_config"] = {"BLOCK_K": 256, ...}` and `metadata["code_variant_id"] = "L1_v1"`
-- On result: `docker/evaluate.py` passes `tuning_config` and `code_variant_id` through from request metadata to result metadata.
-
-This avoids breaking the existing `to_dict()`/`from_dict()`/`encode_b64()`/`decode_b64()` serialization contracts.
+- `docker/evaluate.py` reads `request.get("metadata", {})` from the decoded payload and forwards `tuning_config`/`code_variant_id` into the result's `metadata` dict.
 
 ### `kube_evaluator.py`
 
