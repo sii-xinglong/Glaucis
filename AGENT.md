@@ -512,6 +512,19 @@
 - **Applicable when**: Extending SO18. Use the maximum unroll factor that evenly divides NT for all target shapes. For shapes with NT=4, 4-step is the maximum. For NT=8, up to 8-step is possible.
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
 
+### [FP44] Pallas kernel function must not capture Python constants — pass via functools.partial or Ref
+- **Symptom**: `ValueError: The kernel function ... captures constants [f32[]]. You should pass them as inputs.`
+- **Root cause**: Pallas (Mosaic) kernel functions cannot close over Python-scope variables. A scalar like `scale` used inside the kernel body as a closure variable is detected as a captured constant and rejected. This applies to ALL captured values: scalars, arrays, and JAX tracers.
+- **Fix**: Pass constants as compile-time parameters via `functools.partial(kernel_fn, scale=scale)` (for compile-time constants like scalars) or as explicit `Ref` inputs via BlockSpec (for runtime values). Never reference outer-scope variables inside Pallas kernel functions.
+- **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 1 (simplify_fwd_grid variant)
+
+### [FP45] Pallas_call count reduction and HBM bandwidth optimization have zero impact when register pressure dominates
+- **Symptom**: Three successful variants — eliminate_h_precompute (3→2 pallas_calls), bf16_h_residual (halved h HBM bandwidth), bwd_2pass_no_h_hbm (eliminated h from HBM entirely) — ALL showed exactly 1.000x speedup (13.451ms = baseline).
+- **Root cause**: At severe register pressure (310K fills/spills, 5.6% MXU utilization), the kernel body compute time dominates total execution time. Pallas_call launch overhead and HBM bandwidth for the h tensor are negligible fractions of the ~13.45ms total. The binding constraint is per-chunk compute (12+ matmuls per chunk, 64 chunks per sequence) within the fwd and bwd kernel bodies.
+- **Fix**: When register pressure is the dominant bottleneck (>100K spills, <10% MXU util), do NOT pursue pallas_call count reduction or HBM bandwidth optimization. Focus exclusively on reducing register pressure within kernel bodies: smaller block sizes, fewer live intermediates, simpler kernel body logic.
+- **Relationship**: Contrasts with SO14 (lax.scan→pallas_call) where launch overhead WAS the bottleneck. The difference: SO14's lax.scan had ~59ms PER-ITERATION dispatch overhead (host-device round-trip), while pallas_call grid iterations have negligible overhead when the kernel body itself is massive.
+- **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 1
+
 ### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
 - **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
 - **Root cause**: The backward pass has 9 matmuls per sub-step (2 for A recompute + 1 for dA + 2 for dv + 2 for dq/dk inter + 2 for dq/dk intra), making each sub-step compute-heavy. Grid iteration overhead is a negligible fraction of backward time. The forward pass has only 4 matmuls per sub-step, making grid overhead a larger fraction.
