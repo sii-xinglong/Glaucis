@@ -532,22 +532,28 @@
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 1
 - **Extended**: 2026-04-02, fused_chunk_simple_gla session 2 round 1 — bwd_2pass_split (split backward into dv+dh and dq+dk passes for per-kernel register pressure reduction) also showed 1.000x. Splitting does NOT reduce aggregate spills (still 310K total across passes). CSE/intermediate reduction (reduce_bwd_intermediates) produced identical VLIW/MXU (FP39), and fwd_bwd_fusion (save h from fwd kernel) increased peak memory 50% without speedup. Grid unrolling (SO20 approach) crashed from implementation bugs — should be retried with correct indexing.
 
-### SO20: Grid unrolling on high-iteration-count backward (1.221x on fused_chunk_simple_gla)
-- **Optimization**: 2-step grid unrolling on L2's 2-pass backward kernel (128→64 grid iterations). Extends SO18/SO19 to a much larger kernel (~13ms total execution vs 0.05ms).
-- **Impact**: 1.000x → 1.221x (+22.1%). Latency: 13.46ms → 11.02ms.
-- **Why it works**: L2's 2-pass backward architecture has 2*NT=128 grid iterations — 2x more than the standard single-pass backward (NT=64). The large iteration count means grid overhead is a significant fraction of total runtime even at ~13ms scale. Halving to 64 iterations saves substantial dispatch overhead.
-- **Key finding — spill tolerance**: Register spills INCREASED 14x (310K → 4.28M) and MXU utilization DROPPED 3.4x (5.6% → 1.66%). Despite these severe regressions, the 22% speedup from grid overhead reduction dominated. This proves grid overhead can be the binding constraint even when register pressure is severe.
-- **Contrast with L1**: L1's single-pass architecture (64 grid iterations) showed 0% benefit from 2-step unrolling (0.992x). The threshold for effective grid unrolling on this kernel appears to be >64 iterations.
-- **Forward-only = combined**: Round 3 confirmed that forward-only 2-step (L2_fwd_2step, 1.221x) achieves the SAME speedup as combined fwd+bwd 2-step (L2_fwd_bwd_fix, 1.222x). This is consistent with FP43 — backward unrolling adds negligible benefit when backward compute per sub-step is heavy. The forward kernel with 64 iterations and lighter compute benefits most from grid overhead reduction.
+### SO20: Grid unrolling on high-iteration-count kernels (1.388x on fused_chunk_simple_gla)
+- **Optimization**: N-step grid unrolling on forward kernel, reducing grid iterations by factor N. 2-step: 64→32 iterations. 4-step: 64→16 iterations. Extends SO18/SO19 to a much larger kernel (~13ms total execution vs 0.05ms).
+- **Impact**:
+  - 2-step: 1.000x → 1.222x (+22.2%). Latency: 13.45ms → 11.01ms.
+  - 4-step: 1.222x → 1.388x (+16.6pp). Latency: 11.01ms → 9.69ms. Forward iterations 32→16.
+- **Why it works**: Grid iteration overhead is a significant fraction of total runtime. Each doubling of the unroll factor halves forward iterations. Despite register spills increasing (310K → 4.3M at 2-step → 6.3M at 4-step), the overhead reduction dominates.
+- **Key finding — spill tolerance scales**: At 2-step, spills increased 14x (310K → 4.3M). At 4-step, spills increased 20x (310K → 6.3M). Yet each step produced significant speedup, proving the spill-vs-overhead tradeoff strongly favors more aggressive unrolling.
+- **Key finding — backward simplicity enables forward scaling**: L3 (simple single-step backward) achieves 1.388x with 4-step forward, while L2 (2-step backward) achieves only 1.222x with IDENTICAL 4-step forward code (same VLIW=5275, same MXU=640). At 2-step forward, backward complexity had zero impact (FP43). At 4-step forward, backward complexity INTERFERES. Simpler backward enables better total compilation.
+- **Forward-only = combined at 2-step**: Round 3 confirmed that forward-only 2-step (1.221x) achieves the SAME speedup as combined fwd+bwd 2-step (1.222x). Consistent with FP43 — backward unrolling adds negligible benefit.
 - **Extends**: SO18 (+5.6% at 2-step), SO19 (+8.0% at 4-step) — same mechanism, proven on a much larger kernel scale
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 2
 - **Updated**: 2026-04-02, round 3 — forward-only achieves same speedup as combined fwd+bwd
+- **Updated**: 2026-04-02, round 4 — 4-step forward achieves 1.388x; backward simplicity is critical at >=4-step
 
 ### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
 - **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
 - **Root cause**: The backward pass has 9 matmuls per sub-step (2 for A recompute + 1 for dA + 2 for dv + 2 for dq/dk inter + 2 for dq/dk intra), making each sub-step compute-heavy. Grid iteration overhead is a negligible fraction of backward time. The forward pass has only 4 matmuls per sub-step, making grid overhead a larger fraction.
 - **Fix**: When applying grid unrolling to asymmetric kernels (forward lighter than backward), prioritize forward unrolling. Backward unrolling adds code complexity and register pressure for negligible benefit.
+- **Extended evidence (R4)**: L2_bwd_4step (most aggressive backward unrolling tested: 4-step backward with 2-step forward) achieved only 1.222x — identical to L2's previous best with 2-step backward. VLIW bloat was massive (9544 bundles, 2x the 4825 at 2-step) with zero speedup gain. Additionally, L3_add_bwd_2step (adding 2-step backward to L3's forward-only) achieved 1.222x — exactly matching the forward-only result. Backward unrolling is confirmed dead-end across 4 independent tests.
+- **Compounding effect at >=4-step forward**: At 4-step forward, backward complexity becomes actively harmful (see SO20 update). L2 (2-step backward) achieves only 1.222x while L3 (no backward unrolling) achieves 1.388x with identical forward code.
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 4 — backward 4-step and backward 2-step both confirmed zero benefit
 
 ### [FP46] BlockSpec block_shape dimensionality must exactly match out_shape for grid unrolling h_buf
 - **Symptom**: `ValueError: Block shape for outputs[4] (= (1, 1, 2, 128, 128)) must have the same number of dimensions as the array shape (10, 16, 32, 2, 128, 128)` — h_buf BlockSpec has 5 dimensions but out_shape creates a 6D array.
@@ -562,3 +568,10 @@
 - **Fix**: When adding a STEPS dimension to h_buf for grid unrolling, update ALL kernel body `h_buf_ref` read/write accesses to include the step index as a 4th scalar dimension. For writes: `h_buf_ref[0, 0, 0, step] = value` (not `h_buf_ref[0, 0, 0] = value`). For reads: `h_buf_ref[0, 0, 0, step]` (not `h_buf_ref[0, 0, step]`).
 - **Distinction from FP46**: FP46 is about the BlockSpec/index_map declaration at the pallas_call level. FP47 is about Ref indexing within the kernel body function. Both must be updated when adding a dimension — fixing one without the other causes different errors.
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 3 (2 variants: L2_grid_2step_fix, L2_grid_4step_fix)
+
+### [FP48] Backward kernel complexity interferes with forward unrolling at >=4-step
+- **Symptom**: L2_fwd_4step (4-step forward + 2-step backward) achieves only 1.222x, while L3_fwd_4step (4-step forward + no backward unrolling) achieves 1.388x. Both have IDENTICAL compiled forward kernels (VLIW=5275, MXU=640).
+- **Root cause**: At 4-step forward unrolling, the total kernel compilation includes both forward and backward kernels. The backward kernel's complexity (2-step unrolled backward with VLIW=4825 vs original single-step backward) affects the TOTAL execution path. At 2-step forward, backward complexity had zero impact (FP43) — the interaction only appears at higher forward unrolling levels. The mechanism is likely: (1) complex backward increases total register pressure across the fused computation, (2) XLA/Mosaic makes different scheduling decisions for the total program when backward is complex, (3) DMA/memory scheduling for the full forward+backward pipeline is affected by backward complexity.
+- **Fix**: When pushing forward grid unrolling beyond 2-step, keep backward kernel as SIMPLE as possible (no backward unrolling). Use the simplest backward code path as the base for aggressive forward unrolling. This is the opposite of intuition — more backward unrolling is actively harmful at high forward unrolling.
+- **Evidence**: L3 base (forward-only 2-step, no backward unrolling) → 1.388x at 4-step forward. L2 base (forward+backward 2-step) → 1.222x at 4-step forward. Same compiled forward kernel, different total latency (9.687ms vs 11.006ms).
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 4
