@@ -21,10 +21,12 @@ from pathlib import Path
 
 import numpy as np
 
-try:
-  import jax
-except ImportError:
-  jax = None
+# CRITICAL: Do NOT import jax at module level. IR dump flags
+# (XLA_FLAGS, LIBTPU_INIT_ARGS) must be set via _setup_dump_env()
+# BEFORE jax loads, because importing jax triggers libtpu
+# initialization which reads these flags once. main() imports
+# jax after calling _setup_dump_env(). See FP5 in AGENT.md.
+jax = None
 
 try:
   from xprof.convert import raw_to_tool_data
@@ -821,6 +823,13 @@ def _setup_dump_env():
 
 def main():
   _setup_dump_env()
+
+  global jax
+  try:
+    import jax as _jax
+    jax = _jax
+  except ImportError:
+    pass
 
   parser = argparse.ArgumentParser()
   parser.add_argument("--eval-payload", required=False)

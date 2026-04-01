@@ -448,3 +448,10 @@ def test_stage_benchmark_no_compute_fn():
   result = evaluate.stage_benchmark({}, shapes=[{"M": 4}])
   assert result["ok"] is False
   assert "No compute function" in result["error"]
+
+
+def test_jax_not_imported_at_module_level():
+  """jax must NOT be imported at module level so _setup_dump_env() can
+  set XLA_FLAGS/LIBTPU_INIT_ARGS before libtpu reads them (FP5)."""
+  evaluate = _load_evaluate_module()
+  assert evaluate.jax is None

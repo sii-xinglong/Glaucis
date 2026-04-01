@@ -73,11 +73,13 @@
 - **Rule**: Profile parsing logic needs to handle edge cases where computation events have overlapping or identical timestamps. Consider using the full trace window rather than just the last two events.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise iteration 1
 
-### FP5: stage_profile_deep produces all-null results when dump flags set mid-process
+### FP5: stage_profile_deep produces all-null results when dump flags set mid-process (FIXED)
 - **What**: `stage_profile_deep` returns `ok: true` but all fields (`vliw_bundle_count`, `mxu_utilization`, `hbm_bandwidth_bytes`, `flops`, `arithmetic_intensity`) are null. No `.llo`, `.hlo`, or `.txt` dump files found.
-- **Why**: `XLA_FLAGS` and `LIBTPU_INIT_ARGS` are set after JAX has already compiled the kernel in stages 1-3. `jax.clear_caches()` may not force recompilation if libtpu's internal compilation cache persists. Some LIBTPU_INIT_ARGS flags are only read at process initialization.
-- **Rule**: IR dump flags must be set BEFORE any JAX compilation occurs, or deep profiling must run as a separate process/Job with flags set from startup.
+- **Why**: `import jax` at module level triggered libtpu initialization before `_setup_dump_env()` set `XLA_FLAGS`/`LIBTPU_INIT_ARGS`. libtpu reads these flags once at load time.
+- **Fix**: Deferred `import jax` from module level to inside `main()`, after `_setup_dump_env()` sets the env vars. The module sets `jax = None` and `main()` does `global jax; import jax` after dump env setup.
+- **Rule**: Never import jax at module level in evaluate.py. IR dump flags must be set BEFORE jax loads.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise iteration 1
+- **Fixed**: 2026-04-01
 
 ### FP3: M=2048 + N=512 tiling causes VMEM regression
 - **What**: Setting fwd tiling to (2048, 512, 128) regresses from 1.621x to 1.512x despite fewer grid tiles.
