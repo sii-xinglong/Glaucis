@@ -1,8 +1,1 @@
-{
-  "plugins": [
-    { "type": "local", "path": "./kernel-evolve/plugins/pallas-evolve" }
-  ],
-  "enabledPlugins": {
-    "pallas-evolve": true
-  }
-}
+{}
