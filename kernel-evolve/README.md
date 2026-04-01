@@ -107,11 +107,13 @@ The workflow template is at [`.github/workflows/kernel-eval.yaml`](.github/workf
 
 ## Claude Code Plugin
 
-The pallas-evolve skills are bundled as a Claude Code plugin at `plugins/pallas-evolve/`. There are two ways to install it:
+The pallas-evolve skills are bundled as a Claude Code plugin at `plugins/pallas-evolve/`. Install via a local skills marketplace.
 
-### Option A: Marketplace (recommended)
+### Installation
 
-If you have a local skills marketplace configured, add pallas-evolve to your global settings:
+1. Set up a local skills marketplace directory containing `plugins/pallas-evolve/` (with its `.claude-plugin/plugin.json` and `skills/` subdirectories).
+
+2. Add the marketplace and enable the plugin in your global settings:
 
 ```jsonc
 // ~/.claude/settings.json
@@ -130,32 +132,31 @@ If you have a local skills marketplace configured, add pallas-evolve to your glo
 }
 ```
 
-### Option B: Local plugin (repo-level)
+3. Restart Claude Code. Skills are discovered from the marketplace at session start.
 
-Register as a local plugin in `.claude/settings.json` at the repo root:
+### Keeping skills in sync
 
-```jsonc
-// .claude/settings.json
-{
-  "plugins": [
-    { "type": "local", "path": "./kernel-evolve/plugins/pallas-evolve" }
-  ],
-  "enabledPlugins": {
-    "pallas-evolve": true
-  }
-}
+The canonical skill definitions live in this repo at `plugins/pallas-evolve/skills/`. When you add or update a skill here, copy it to your marketplace source directory so Claude Code picks up the changes:
+
+```bash
+# Example: sync all skills to your marketplace
+cp -r kernel-evolve/plugins/pallas-evolve/skills/* /path/to/skills/plugins/pallas-evolve/skills/
+
+# Clear the plugin cache to force re-scan
+rm -rf ~/.claude/plugins/cache/<your-marketplace-name>/pallas-evolve/
 ```
 
-> **Note**: Local plugins declared in repo-level settings may not load correctly in git worktree sessions due to relative path resolution. If skills don't appear after `claude /doctor`, switch to the marketplace approach (Option A) which uses absolute paths and works reliably in all contexts.
+Then restart Claude Code.
 
 ### Verifying installation
 
-Restart Claude Code, then check that pallas-evolve skills appear in the session. You should see `pallas-evolve:start`, `pallas-evolve:submit`, etc. in the available skills list. If they don't appear, run `/doctor` to diagnose.
+After restarting, check that all pallas-evolve skills appear in the session's available skills list. If they don't appear, verify your marketplace path and run `/doctor` to diagnose.
 
 ### Available skills
 
 ```
-/pallas-evolve:start <config.yaml>    # Start an optimization session
+/pallas-evolve:init-kernel <name>      # Initialize a kernel project from upstream
+/pallas-evolve:start <config.yaml>     # Start an optimization session
 /pallas-evolve:submit                  # Submit variants for TPU evaluation
 /pallas-evolve:analyze                 # Analyze evaluation results
 /pallas-evolve:reflect                 # Record learnings to AGENT.md
