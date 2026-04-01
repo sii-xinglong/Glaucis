@@ -1,0 +1,106 @@
+{
+  "status": "SUCCESS",
+  "variant_id": "baseline",
+  "fitness": 0.9997848850282376,
+  "latency_ms": 13.454935174000013,
+  "speedup": 0.9997848850282376,
+  "flops": 0.0,
+  "compute_ratio": 1.0,
+  "memory_transfer_ratio": 0.0,
+  "metadata": {
+    "reference_latency_ms": 13.452040815999993,
+    "reference_perf_ok": true,
+    "profile_diagnostics": {
+      "process_names": {
+        "3": [
+          "/device:TPU:0",
+          "_counters_",
+          "XLA Modules",
+          "XLA Ops",
+          "Async XLA Ops",
+          "Tensor Core",
+          "Tensor Core Sync Flag",
+          "counters_0",
+          "Framework Name Scope",
+          "Framework Ops",
+          "Source code"
+        ],
+        "701": [
+          "/host:CPU",
+          "main/580",
+          "futex-default-SDomainT/1280",
+          "python",
+          "jit_optimized_compute"
+        ]
+      },
+      "selected_pid": 3,
+      "total_events": 1000033,
+      "tpu_events": 999970,
+      "computation_events": 34
+    },
+    "hw_utilization": {
+      "mxu_util_pct": 5.615083904160298,
+      "vector_alu_util_pct": 3.834048740196782,
+      "scalar_alu_util_pct": 3.922040950989877,
+      "vector_load_util_pct": 0.6726535360755846,
+      "vector_store_util_pct": 0.859807040752154,
+      "vector_eup_util_pct": 0.3860164835238977,
+      "vector_fills": 310256,
+      "vector_spills": 310256
+    },
+    "profile": {
+      "ok": true,
+      "vliw_bundle_count": 5,
+      "mxu_utilization": null,
+      "hbm_bandwidth_bytes": null,
+      "flops": null,
+      "arithmetic_intensity": null,
+      "vmem_allocation": null,
+      "vmem_utilization_pct": null,
+      "bundle_density": null,
+      "dma_analysis": null,
+      "fusion_analysis": {
+        "fusion_count": 0,
+        "has_cross_program_prefetch": false
+      },
+      "special_units": null,
+      "hbm_capacity_utilization_pct": 0.6510421633720398
+    },
+    "benchmark": {
+      "lower_time_ms": 62.36407399956079,
+      "compile_time_ms": 26925.180816000648,
+      "evaluation_times_ms": [
+        13.549628001000004,
+        0.005721638999995776,
+        13.440561974000012,
+        13.558324204999996,
+        13.454935174000013
+      ],
+      "peak_memory_mb": 1280.0009765625,
+      "median_ms": 13.454935174000013,
+      "min_ms": 0.005721638999995776,
+      "max_ms": 13.558324204999996,
+      "stddev_ms": 5.39826793321302,
+      "cv": 0.40121099532642124,
+      "timing_source": "xprof_clustered"
+    },
+    "reference_benchmark": {
+      "lower_time_ms": 94.84581099968636,
+      "compile_time_ms": 26590.500804999465,
+      "evaluation_times_ms": [
+        13.555064826000002,
+        13.452040815999993,
+        13.556804472000003,
+        0.005648484000004828,
+        13.447521157999988
+      ],
+      "peak_memory_mb": 1280.0009765625,
+      "median_ms": 13.452040815999993,
+      "min_ms": 0.005648484000004828,
+      "max_ms": 13.556804472000003,
+      "stddev_ms": 5.399092667688665,
+      "cv": 0.4013586296338716,
+      "timing_source": "xprof_clustered"
+    }
+  }
+}
