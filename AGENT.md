@@ -538,8 +538,10 @@
 - **Why it works**: L2's 2-pass backward architecture has 2*NT=128 grid iterations — 2x more than the standard single-pass backward (NT=64). The large iteration count means grid overhead is a significant fraction of total runtime even at ~13ms scale. Halving to 64 iterations saves substantial dispatch overhead.
 - **Key finding — spill tolerance**: Register spills INCREASED 14x (310K → 4.28M) and MXU utilization DROPPED 3.4x (5.6% → 1.66%). Despite these severe regressions, the 22% speedup from grid overhead reduction dominated. This proves grid overhead can be the binding constraint even when register pressure is severe.
 - **Contrast with L1**: L1's single-pass architecture (64 grid iterations) showed 0% benefit from 2-step unrolling (0.992x). The threshold for effective grid unrolling on this kernel appears to be >64 iterations.
+- **Forward-only = combined**: Round 3 confirmed that forward-only 2-step (L2_fwd_2step, 1.221x) achieves the SAME speedup as combined fwd+bwd 2-step (L2_fwd_bwd_fix, 1.222x). This is consistent with FP43 — backward unrolling adds negligible benefit when backward compute per sub-step is heavy. The forward kernel with 64 iterations and lighter compute benefits most from grid overhead reduction.
 - **Extends**: SO18 (+5.6% at 2-step), SO19 (+8.0% at 4-step) — same mechanism, proven on a much larger kernel scale
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 2
+- **Updated**: 2026-04-02, round 3 — forward-only achieves same speedup as combined fwd+bwd
 
 ### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
 - **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
@@ -553,3 +555,10 @@
 - **Fix**: For N-step grid unrolling h_buf: block_shape = (1, 1, 1, N, K, V) with 6D index_map returning (b, h, block_idx, 0, 0, 0). Count the dimensions of the out_shape array and ensure block_shape has the same count.
 - **Extends**: FP17 (BlockSpec dimensions must match array dimensions). Same principle but specific to output buffers created via grid unrolling with multi-step structure.
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 2 (3 variants: L2_grid_unroll_2step, L2_grid_unroll_4step, L2_fwd_bwd_unroll)
+
+### [FP47] Grid unrolling h_buf Ref indexing must use correct scalar index count for 6D blocks
+- **Symptom**: `ValueError: Invalid shape for 'swap'. Ref shape: (1, 1, 1, 2, 128, 128). Expected shape: (2, 128, 128). Value shape: (128, 128).` — kernel body writes (K,V)=(128,128) value to h_buf_ref but indexing selects (STEPS,K,V)=(2,128,128) slice.
+- **Root cause**: After fixing FP46 (BlockSpec dimensionality 5D→6D), the kernel body code still uses the old 3-scalar-index pattern `h_buf_ref[0, 0, 0]` which selects batch/head/group dims, leaving (STEPS, K, V) = (2, 128, 128). To get a (K, V) slice, must use 4 scalar indices: `h_buf_ref[0, 0, 0, step_idx]`.
+- **Fix**: When adding a STEPS dimension to h_buf for grid unrolling, update ALL kernel body `h_buf_ref` read/write accesses to include the step index as a 4th scalar dimension. For writes: `h_buf_ref[0, 0, 0, step] = value` (not `h_buf_ref[0, 0, 0] = value`). For reads: `h_buf_ref[0, 0, 0, step]` (not `h_buf_ref[0, 0, step]`).
+- **Distinction from FP46**: FP46 is about the BlockSpec/index_map declaration at the pallas_call level. FP47 is about Ref indexing within the kernel body function. Both must be updated when adding a dimension — fixing one without the other causes different errors.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 3 (2 variants: L2_grid_2step_fix, L2_grid_4step_fix)
