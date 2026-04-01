@@ -499,3 +499,19 @@
 - **Applicable when**: A Pallas kernel with "arbitrary" time dimension has small per-iteration compute relative to grid overhead. Multi-step unrolling amortizes overhead. Requires NT % unroll_factor == 0.
 - **Next step**: Try 4-step unrolling (NT/4 iterations). For T=256/BT=64, NT=4, so 4-step = 1 iteration total (eliminate ALL grid overhead).
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 3
+
+### SO19: 4-step grid unrolling — maximum grid reduction (1.321x — +8.0% over previous best)
+- **Optimization**: Extend SO18 from 2-step to 4-step unrolling. Grid changes from (B, H, 1, 1, NT//2) to (B, H, 1, 1, NT//4). For T=256/BT=64, NT=4 → NT//4=1, completely eliminating ALL grid iteration overhead. BlockSpecs load 4*BT rows. h output covers 4 NT slots.
+- **Impact**: 1.223x → 1.321x (+8.0%). MXU util improved +6.2pp (27.7% → 33.9%). Latency: 0.0508ms → 0.0471ms.
+- **Why it works**: Same mechanism as SO18 but pushed to the maximum. For T=256, zero grid iterations remain — the entire time dimension processes in a single kernel invocation. For T=512 (NT=8), 2 iterations remain (vs 4 at 2-step). The compiled kernel body is STILL identical (8270 VLIW, 4656 MXU, dual_ratio=0.0).
+- **Critical finding — forward is the bottleneck**: Asymmetric testing proved that forward 4-step alone (backward 2-step) captures ~100% of the benefit (1.317x), while backward 4-step alone (forward 2-step) adds ~0% (1.225x vs 1.223x). The forward pass has 4 matmuls/sub-step making grid overhead a larger fraction, while the backward's 9 matmuls/sub-step already amortizes overhead well.
+- **Critical finding — FP39 extends to grid-level equivalence**: L1 and L2 lineages (with completely different source-level kernel code — different VMEM scratch configs, different operation ordering) produce IDENTICAL compiled metrics at the same grid structure. All 4-step variants: 8270 VLIW, 4656 MXU, 36100/35720 fills/spills.
+- **Trade-off**: Register spills increased further (36100/35720 vs 30975/32435 at 2-step), but still not the binding constraint.
+- **Applicable when**: Extending SO18. Use the maximum unroll factor that evenly divides NT for all target shapes. For shapes with NT=4, 4-step is the maximum. For NT=8, up to 8-step is possible.
+- **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
+
+### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
+- **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
+- **Root cause**: The backward pass has 9 matmuls per sub-step (2 for A recompute + 1 for dA + 2 for dv + 2 for dq/dk inter + 2 for dq/dk intra), making each sub-step compute-heavy. Grid iteration overhead is a negligible fraction of backward time. The forward pass has only 4 matmuls per sub-step, making grid overhead a larger fraction.
+- **Fix**: When applying grid unrolling to asymmetric kernels (forward lighter than backward), prioritize forward unrolling. Backward unrolling adds code complexity and register pressure for negligible benefit.
+- **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
