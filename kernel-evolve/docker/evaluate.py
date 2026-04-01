@@ -658,10 +658,13 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       # Count MXU operations — multiple naming conventions
       mxu0_count = len(re.findall(r"\.mxu0\b", llo_text))
       mxu1_count = len(re.findall(r"\.mxu1\b", llo_text))
-      # v7x may use different MXU names: matmul, dot, mxu, tc (tensor core)
+      # v7x MLIR LLO uses llo.vmatmul for MXU ops (not .mxu0/.mxu1)
       if mxu0_count + mxu1_count == 0:
-        mxu0_count = len(re.findall(r"\bmatmul\b", llo_text, re.IGNORECASE))
-        mxu1_count = len(re.findall(r"\bmxu\b", llo_text, re.IGNORECASE))
+        vmatmul_count = len(re.findall(r"\bllo\.vmatmul\b", llo_text))
+        if vmatmul_count > 0:
+          # MLIR format doesn't distinguish mxu0/mxu1; report total
+          mxu0_count = vmatmul_count
+          mxu1_count = 0
 
     total_mxu = mxu0_count + mxu1_count
     if total_mxu > 0:
@@ -685,7 +688,7 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
     special_units = None
 
     if best_file is not None:
-      # VMEM allocations
+      # VMEM allocations — classic format
       alloc_re = re.compile(
         r"#allocation\d+\s*=\s*\w+\[[^\]]*\]"
         r"(?:,\s*space=(\w+))?"
@@ -702,6 +705,33 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
         else:
           vmem_b += sz
         alloc_count += 1
+
+      # v7x MLIR LLO format: parse memref types from function signature
+      # e.g. memref<1x1x128x128xf32, ..., #tpu.memory_space<vmem>>
+      if alloc_count == 0:
+        vmem_memrefs = re.findall(
+          r"memref<([\dx]+)x(\w+),\s*[^>]+memory_space<vmem>",
+          llo_text,
+        )
+        smem_memrefs = re.findall(
+          r"memref<([\dx]+)x(\w+),\s*[^>]+memory_space<smem>",
+          llo_text,
+        )
+        for shape_str, dtype in vmem_memrefs:
+          elems = 1
+          for d in shape_str.split("x"):
+            if d:
+              elems *= int(d)
+          vmem_b += elems * _DTYPE_BYTES.get(dtype, 4)
+          alloc_count += 1
+        for shape_str, dtype in smem_memrefs:
+          elems = 1
+          for d in shape_str.split("x"):
+            if d:
+              elems *= int(d)
+          smem_b += elems * _DTYPE_BYTES.get(dtype, 4)
+          alloc_count += 1
+
       if alloc_count > 0:
         vmem_allocation = {
           "vmem_bytes": vmem_b,
@@ -724,9 +754,26 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
             "avg_ops_per_bundle": sum(ops_list) / len(ops_list),
             "max_ops_per_bundle": max(ops_list),
           }
+      else:
+        # v7x MLIR LLO: no ;; separators. Count total llo.* operations
+        # and total %var assignments for an ops-per-assignment ratio.
+        llo_ops = len(re.findall(r"\bllo\.\w+", llo_text))
+        assign_count = vliw_bundle_count or 0
+        if assign_count > 0 and llo_ops > 0:
+          bundle_density = {
+            "total_bundles": assign_count,
+            "avg_ops_per_bundle": llo_ops / assign_count,
+            "max_ops_per_bundle": 0,  # not available in MLIR format
+          }
 
       # DMA analysis
       dma_cnt = len(re.findall(r"\bdma\.\w+", llo_text))
+      if dma_cnt == 0:
+        # v7x MLIR: count llo.vector_load/llo.vector_store as memory ops
+        dma_cnt = (
+          len(re.findall(r"\bllo\.vector_load\b", llo_text))
+          + len(re.findall(r"\bllo\.vector_store\b", llo_text))
+        )
       if dma_cnt > 0:
         dma_analysis = {
           "dma_count": dma_cnt,
@@ -738,6 +785,11 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       xlane = len(re.findall(r"\b\w+\.xlane\b", llo_text))
       eup = len(re.findall(r"\bvpow2\b", llo_text)) + len(re.findall(r"\bvpop\.eup\b", llo_text))
       nops = len(re.findall(r"^\s*nop\b", llo_text, re.MULTILINE))
+      # v7x MLIR: check for llo.vxpose (cross-lane), llo.vbcast (broadcast)
+      if xlane == 0:
+        xlane = len(re.findall(r"\bllo\.vxpose\b", llo_text))
+      if eup == 0:
+        eup = len(re.findall(r"\bllo\.vdwg\b", llo_text))  # exp/pow via vdwg
       if xlane + eup + nops > 0:
         special_units = {
           "xlane_ops": xlane,
