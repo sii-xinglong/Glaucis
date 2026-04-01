@@ -1,0 +1,44 @@
+# Source: primatrix/pallas-kernel @ branch: feat/chunk-gla-fused-kernels
+# Commit: 1de541558ce12b8fc6c439a85f020422a4ba2c6a
+# Initialized: 2026-04-01
+
+kernel:
+  name: "chunk_fused_kernels"
+  template: "kernels/chunk_fused_kernels.py"
+  reference: "kernels/chunk_fused_kernels_ref.py"
+  evolve_markers:
+    start: "# EVOLVE-BLOCK-START"
+    end: "# EVOLVE-BLOCK-END"
+
+# Upstream test dimensions:
+#   q, k: [B, T, H, 128]   v: [B, T, H, 128]   g_gamma: [H]
+#   Fused kernel requires K=128, V=128 (single-tile, no multi-tile reduction)
+shapes:
+  - { B: 2, T: 256, H: 4, K: 128, V: 128, chunk_size: 64 }
+  - { B: 1, T: 512, H: 4, K: 128, V: 128, chunk_size: 64 }
+
+correctness:
+  method: "allclose"
+  rtol: 1e-2
+  atol: 1.0
+
+evaluator:
+  namespace: "default"
+  job_template: ".github/ci/kernel-eval-job.yaml"
+  repo: "sii-xinglong/Glaucis"
+  branch: "main"
+  poll_interval: 15
+  timeout: 600
+
+tpu:
+  cluster: "tpu7x-cluster"
+  zone: "us-central1"
+
+batch:
+  variants_per_round: 5
+  top_k: 2
+  max_active_lineages: 4
+
+session:
+  max_iterations: 20
+  output_dir: "runs/chunk_fused_kernels"
