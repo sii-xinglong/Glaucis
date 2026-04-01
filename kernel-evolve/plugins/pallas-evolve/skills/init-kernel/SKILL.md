@@ -7,22 +7,35 @@ description: Use when initializing a new kernel optimization project from primat
 
 Bootstrap a kernel optimization project by importing a kernel from the `primatrix/pallas-kernel` upstream repository. Clones the upstream repo, consolidates multi-file kernel code into self-contained files, generates a template with EVOLVE-BLOCK markers, copies tests, generates a YAML config, and validates.
 
+> **CRITICAL RULE — NO REWRITING**
+>
+> When generating ref and template files, you MUST copy upstream function source code **verbatim**. You are an assembler, not an author. The only code you are allowed to write from scratch is:
+> - `_make_test_data()` (test data generation)
+> - `simple_compute()` / `optimized_compute()` (thin wrappers that call copied upstream functions)
+> - `reference_fn()` (one-line delegation)
+>
+> Everything else — kernel functions, helper functions, custom_vjp rules, launchers — MUST be copied character-for-character from the upstream source. If a function has a bug upstream, copy the bug. If the style is inconsistent, copy it as-is. **NEVER rewrite, simplify, reimplement, or "improve" any upstream function.**
+
 ## Arguments
 
 Expects arguments in this format:
 
 ```
-/pallas-evolve:init-kernel <kernel_name> [--branch <branch>] [--repo <repo_url>]
+/pallas-evolve:init-kernel <kernel_name> [--ref-fn <function>] [--template-fn <function>] [--branch <branch>] [--repo <repo_url>]
 ```
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `kernel_name` | Yes | — | Upstream kernel name, corresponding to `tops/ops/<kernel_name>/` directory |
+| `--ref-fn` | No | auto-detect | Upstream function name to use as reference entry point (e.g. `chunk_simple_gla`). When specified, this function and all its transitive dependencies are copied verbatim into the ref file. |
+| `--template-fn` | No | same as `--ref-fn` | Upstream function name to use as template entry point (e.g. `fused_chunk_simple_gla`). When different from `--ref-fn`, the template gets a different code path than the ref. |
 | `--branch` | No | `main` | Branch in primatrix/pallas-kernel |
 | `--repo` | No | `https://github.com/primatrix/pallas-kernel` | Upstream repository URL |
 
 **Parse the arguments** from the invocation. Extract:
 - `KERNEL_NAME`: the first positional argument (required)
+- `REF_FN`: value after `--ref-fn` flag, default `None` (auto-detect)
+- `TEMPLATE_FN`: value after `--template-fn` flag, default same as `REF_FN`
 - `BRANCH`: value after `--branch` flag, default `main`
 - `REPO_URL`: value after `--repo` flag, default `https://github.com/primatrix/pallas-kernel`
 
@@ -105,14 +118,16 @@ Read ALL `.py` files in `$TMPDIR/tops/ops/$KERNEL_NAME/`. For each file, analyze
 
 ### 2.5a. Identify the main compute function
 
-Look for the primary entry-point function — the function that takes shape parameters and returns computation results. Search patterns (in priority order):
+**If `--ref-fn` and/or `--template-fn` were specified**: use those function names directly. Validate that each specified function exists in at least one of the upstream `.py` files. If not found, report the error and list all top-level function names found in the upstream files so the user can correct the name.
+
+**If not specified (auto-detect)**: look for the primary entry-point function. Search patterns (in priority order):
 
 1. A function called from the upstream test files (most reliable)
 2. A function decorated with `@jax.custom_vjp` (indicates a differentiable kernel)
 3. A function matching the kernel name (e.g., `def chunk_gla(...)`, `def gla(...)`)
 4. A function named `forward`, `compute`, or `main`
 
-Record the function name and its full signature (parameter names and defaults).
+Record the function name(s) and their full signatures (parameter names and defaults).
 
 ### 2.5b. Check for custom_vjp
 
@@ -173,7 +188,38 @@ These files are for reference only — they are NOT used by evaluate.py.
 
 **Critical**: evaluate.py loads kernel files via `exec(kernel_code, exec_globals)`. The ref file MUST be fully self-contained — no relative imports, no imports from adjacent directories.
 
-Create `kernel-evolve/examples/kernels/${KERNEL_NAME}_ref.py` by consolidating ALL upstream source files into a single file. Follow this structure:
+**Critical**: You MUST NOT rewrite any upstream code. The consolidation process is purely mechanical: copy function source text, resolve imports by inlining, deduplicate. See the "NO REWRITING" rule at the top of this document.
+
+Create `kernel-evolve/examples/kernels/${KERNEL_NAME}_ref.py` by **copying** upstream functions into a single file via the following procedure:
+
+#### 3b-i. Identify the ref entry-point function
+
+Use the `REF_FN` identified in Step 2.5a (either from `--ref-fn` or auto-detected). This is the function that will be called by `simple_compute()`.
+
+#### 3b-ii. Trace transitive dependencies
+
+Starting from the entry-point function, recursively find ALL functions and classes it depends on:
+
+1. Read the source file containing the entry-point function
+2. Find all function/class calls within its body (e.g., `fused_chunk_fwd(...)`, `exp(...)`, `chunk_fwd_h(...)`)
+3. For each called function/class, locate its definition in the upstream source files. Search scope:
+   - `$TMPDIR/tops/ops/$KERNEL_NAME/*.py` (kernel-specific files)
+   - `$TMPDIR/tops/ops/common/*.py` (shared utilities)
+   - `$TMPDIR/tops/utils.py` (repo-wide utilities)
+4. Recursively trace each dependency's dependencies
+5. Build a topologically-sorted list of all functions/classes needed
+
+Skip standard library and JAX functions (e.g., `jnp.dot`, `lax.scan`, `functools.partial`) — these come from imports.
+
+#### 3b-iii. Copy functions verbatim
+
+For each function/class in the topological order (leaves first):
+
+1. **Copy the exact source text** of the function definition — from `def func_name(` (or `class ClassName:`) through the end of its body, including all decorators (e.g., `@functools.partial(jax.custom_vjp, ...)`)
+2. **Do NOT modify the function body in any way** — no renaming, no simplification, no "equivalent" reimplementation
+3. Add a comment above each copied block indicating its source file: `# From: tops/ops/{path}`
+
+#### 3b-iv. Assemble the output file
 
 ```python
 # Source: primatrix/pallas-kernel @ branch: {BRANCH}
@@ -181,7 +227,7 @@ Create `kernel-evolve/examples/kernels/${KERNEL_NAME}_ref.py` by consolidating A
 # Initialized: {TODAY's date YYYY-MM-DD}
 """Reference {KERNEL_NAME} kernel from primatrix/pallas-kernel.
 
-Unmodified algorithm logic consolidated into a single self-contained file.
+Upstream code copied verbatim into a single self-contained file.
 Used as the correctness baseline for evolutionary optimization.
 """
 
@@ -189,14 +235,27 @@ Used as the correctness baseline for evolutionary optimization.
 import functools
 import jax
 import jax.numpy as jnp
-# ... (all imports from upstream files, deduplicated)
+# ... (collect ALL import statements from all upstream files that
+#      contributed functions, deduplicate, remove relative imports
+#      like `from .utils import exp` since the code is now inlined)
 
-# --- Inlined code from upstream files (in dependency order) ---
-# Code from tops/ops/{KERNEL_NAME}/utils.py (if exists)
-# Code from tops/ops/{KERNEL_NAME}/chunk.py
-# ... etc.
+# --- Copied upstream code (in dependency order, leaves first) ---
 
-# --- Private helpers ---
+# From: tops/ops/utils.py
+def exp(x):
+    ...  # EXACT copy from upstream
+
+# From: tops/ops/common/chunk_h.py
+def _chunk_fwd_h_kernel(...):
+    ...  # EXACT copy from upstream
+
+# ... (all other dependencies)
+
+# From: tops/ops/{KERNEL_NAME}/chunk.py
+def chunk_simple_gla(...):
+    ...  # EXACT copy of the entry-point function
+
+# --- Private helpers (NEW code — only these are written by you) ---
 
 def _make_test_data({shape_params_with_defaults}):
     """Create deterministic test data for the kernel."""
@@ -205,13 +264,13 @@ def _make_test_data({shape_params_with_defaults}):
     ...
 
 
-# --- Public API for evaluate.py ---
+# --- Public API for evaluate.py (NEW code — thin wrappers only) ---
 
 def simple_compute({shape_params_with_defaults}):
     """Run the reference kernel and return a scalar loss for correctness comparison."""
-    # Create test data
-    # Call the kernel's main compute function
-    # Return a scalar (e.g., jnp.sum of the output) for easy diff comparison
+    # Create test data via _make_test_data
+    # Call the COPIED upstream entry-point function
+    # Return a scalar (e.g., jnp.sum of the output)
     ...
 
 
@@ -220,13 +279,21 @@ def reference_fn(**kwargs):
     return simple_compute(**kwargs)
 ```
 
-Key rules:
-1. **Inline all cross-file imports**: Replace `from .utils import foo` with the actual code of `foo` inlined above.
-2. **Preserve algorithm logic exactly**: No functional changes to the upstream code.
-3. **Deduplicate imports**: Merge import statements from all upstream files.
-4. **Use fixed PRNG seeds**: `jax.random.PRNGKey(0)`, `PRNGKey(1)`, etc. for deterministic test data.
-5. **Return scalar output**: `simple_compute` should return a scalar (e.g., `jnp.sum(output)`) so evaluate.py can compute `max_diff = max(abs(template_out - ref_out))`.
-6. **Match signature convention**: `simple_compute` takes shape params as keyword arguments with defaults. `reference_fn` takes `**kwargs` and delegates.
+#### 3b-v. Allowed vs. prohibited transformations
+
+**ALLOWED** (mechanical, no logic changes):
+- Remove relative import lines (`from .utils import exp`, `from ..common import chunk_h`) — the imported code is now inlined above
+- Deduplicate stdlib/JAX import statements at the top
+- Add `# From:` source comments above each copied block
+- Write `_make_test_data()`, `simple_compute()`, `reference_fn()` from scratch — these are new glue code
+
+**PROHIBITED** (these will cause correctness bugs):
+- Rewriting a function body to use different operations (e.g., replacing `pallas_call` with `lax.scan`)
+- Simplifying or "cleaning up" upstream code
+- Renaming internal variables or functions
+- Changing precision annotations, dtype casts, or accumulator types
+- Omitting functions you consider "unnecessary" — if the entry point calls it, include it
+- Writing "equivalent" implementations instead of copying
 
 Reference existing files for the pattern:
 - Simple case: Read `kernel-evolve/examples/kernels/matmul_ref.py`
@@ -234,7 +301,30 @@ Reference existing files for the pattern:
 
 ## Step 4 — Generate template kernel
 
-Create `kernel-evolve/examples/kernels/${KERNEL_NAME}.py` starting from the consolidated ref code. The key difference: add EVOLVE-BLOCK markers around the kernel logic that the evolutionary optimizer will mutate.
+Create `kernel-evolve/examples/kernels/${KERNEL_NAME}.py` using the same **copy-based** consolidation process as Step 3b, but with the `TEMPLATE_FN` entry point (from `--template-fn`, or the same as `REF_FN` if not specified).
+
+**Critical**: The same "NO REWRITING" rule applies. Copy upstream code verbatim. Do not reimplement.
+
+### When `TEMPLATE_FN` == `REF_FN` (default)
+
+The template file contains the **same copied upstream code** as the ref file, plus EVOLVE-BLOCK markers. The only difference is:
+- Ref has `simple_compute()` wrapper → Template has `optimized_compute()` wrapper
+- Template has `# EVOLVE-BLOCK-START` / `# EVOLVE-BLOCK-END` markers
+
+### When `TEMPLATE_FN` != `REF_FN`
+
+The template file contains a **different set of copied upstream code** (traced from `TEMPLATE_FN`). For example:
+- Ref uses `chunk_simple_gla` (non-fused, scan-based) as entry point
+- Template uses `fused_chunk_simple_gla` (fused Pallas kernels) as entry point
+
+Both are copied verbatim from upstream — just different functions.
+
+### Consolidation procedure
+
+Follow the exact same Steps 3b-i through 3b-v, substituting:
+- `TEMPLATE_FN` instead of `REF_FN` as the entry point
+- `optimized_compute` instead of `simple_compute` as the wrapper name
+- Add `# EVOLVE-BLOCK-START` / `# EVOLVE-BLOCK-END` markers around the copied code
 
 ### EVOLVE-BLOCK placement rules
 
@@ -246,12 +336,8 @@ The EVOLVE-BLOCK boundary determines what the optimizer can change. **Incorrect 
 - Constants and configuration values
 
 **INSIDE the EVOLVE-BLOCK** (mutable — optimizer will modify):
-- Pallas kernel functions (`def kernel_body(...)`, etc.)
-- `pallas_call` invocations with their `BlockSpec`, `grid`, etc.
-- Tiling parameters, block sizes
-- Memory layout and transpose strategies
-- Loop structures and pipelining
-- `optimized_compute` function (signature and body — the optimizer may adjust how it orchestrates the Pallas calls)
+- All copied upstream kernel functions (Pallas kernels, launchers, custom_vjp wrappers, helpers)
+- `optimized_compute` function
 
 ### Template file structure
 
@@ -277,7 +363,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
-# ... (all imports, same as ref)
+# ... (all imports from the copied upstream code, deduplicated)
 
 
 def _make_test_data({shape_params_with_defaults}):
@@ -287,10 +373,22 @@ def _make_test_data({shape_params_with_defaults}):
 
 
 # EVOLVE-BLOCK-START
-{all Pallas kernel functions}
+
+# --- Copied upstream code (verbatim, same process as Step 3b) ---
+
+# From: tops/ops/utils.py
+def exp(x):
+    ...  # EXACT copy
+
+# From: tops/ops/{KERNEL_NAME}/fused_chunk.py
+def _fused_chunk_fwd_kernel(...):
+    ...  # EXACT copy
+
+# ... (all dependencies, then entry point)
 
 def optimized_compute({shape_params_with_defaults}):
     """Run the optimized kernel and return a scalar loss."""
+    # Create test data, call the copied upstream entry-point, return scalar
     ...
 # EVOLVE-BLOCK-END
 ```
@@ -298,8 +396,8 @@ def optimized_compute({shape_params_with_defaults}):
 Key rules:
 1. **`_make_test_data` MUST be identical** in both ref and template — same PRNG seeds, same shapes, same dtypes.
 2. **`optimized_compute` signature MUST match `simple_compute`** — same parameter names and defaults.
-3. **The initial template body should be functionally equivalent to the ref** — it will diverge during optimization.
-4. **Include Pallas imports** (`pl`, `pltpu`) even if the initial code uses pure JAX — the optimizer will need them.
+3. **All upstream code inside EVOLVE-BLOCK is copied verbatim** — it will diverge during optimization, but starts as an exact copy.
+4. **Include Pallas imports** (`pl`, `pltpu`) even if the copied code doesn't use them yet — the optimizer will need them.
 
 Reference existing files for the pattern:
 - Simple case: Read `kernel-evolve/examples/kernels/matmul.py`
