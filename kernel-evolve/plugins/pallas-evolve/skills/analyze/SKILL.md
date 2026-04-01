@@ -487,3 +487,14 @@ When generating suggestions for each variant, use these categories based on the 
 - Compare the current kernel with the lineage's previous best
 - Identify what changed and why it was slower
 - Suggest reverting the specific change that caused regression
+
+### Step 9: Context note
+
+All analysis outputs have been persisted to disk:
+- `iteration_{N}/batch_analysis.md` — full comparative analysis
+- `iteration_{N}/selection.md` — top-K selection rationale
+- `lineages.json` — updated lineage state
+
+**Do NOT compact here** — this skill is typically invoked within the `pallas-evolve:start` loop, which manages compaction at Phase 5 after all phases complete. Compacting mid-loop would lose orchestration context needed by subsequent phases (reflect, continue).
+
+If invoked **standalone** (outside the start loop), invoke `/compact` after this skill completes.

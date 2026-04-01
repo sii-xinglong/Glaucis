@@ -539,6 +539,18 @@ If shapes could not be extracted from upstream tests, use AskUserQuestion to ask
   ```
 - Warn the user that they may need to create the custom job template (reference `.github/ci/kernel-eval-gmm-job.yaml` for the pattern).
 
+## Step 7.5 — Compact context
+
+All source files have been generated and the upstream code has been consolidated. The following files are on disk:
+- `kernel-evolve/examples/kernels/${KERNEL_NAME}_ref.py` — self-contained reference
+- `kernel-evolve/examples/kernels/${KERNEL_NAME}.py` — template with EVOLVE-BLOCK
+- `kernel-evolve/examples/${KERNEL_NAME}.yaml` — YAML config
+- `kernel-evolve/upstream/${KERNEL_NAME}/` — unmodified upstream source
+- `kernel-evolve/tests/test_${KERNEL_NAME}.py` — pytest convention tests
+- `kernel-evolve/tests/standalone_${KERNEL_NAME}_test.py` — TPU integration test
+
+Invoke `/compact` to compress conversation context before proceeding to validation. The upstream source code read during Steps 2–3 and the intermediate analysis are no longer needed in context — validation steps (8–9) will read generated files from disk.
+
 ## Step 8 — Validate generated config
 
 Validate the generated YAML config against the Pydantic schema:

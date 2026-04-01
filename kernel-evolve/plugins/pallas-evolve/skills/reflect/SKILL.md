@@ -115,3 +115,13 @@ If AGENT.md was modified, create a single commit for all changes from this round
 git add AGENT.md
 git commit -m "docs(agent): record learnings from {kernel_name} round {N}"
 ```
+
+### Step 6: Context note
+
+All learnings have been persisted:
+- `AGENT.md` — updated failure patterns and successful optimizations (committed)
+- GitHub Issue #{issue_number} — round summary comment posted
+
+**Do NOT compact here** — this skill is typically invoked within the `pallas-evolve:start` loop (Phase 4), and the subsequent Phase 5 (COMPACT) handles context compression with proper state verification. Compacting mid-loop would lose orchestration context.
+
+If invoked **standalone** (outside the start loop), invoke `/compact` after this skill completes.
