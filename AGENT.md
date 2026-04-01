@@ -525,6 +525,15 @@
 - **Relationship**: Contrasts with SO14 (lax.scan→pallas_call) where launch overhead WAS the bottleneck. The difference: SO14's lax.scan had ~59ms PER-ITERATION dispatch overhead (host-device round-trip), while pallas_call grid iterations have negligible overhead when the kernel body itself is massive.
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 1
 
+### SO20: Grid unrolling on high-iteration-count backward (1.221x on fused_chunk_simple_gla)
+- **Optimization**: 2-step grid unrolling on L2's 2-pass backward kernel (128→64 grid iterations). Extends SO18/SO19 to a much larger kernel (~13ms total execution vs 0.05ms).
+- **Impact**: 1.000x → 1.221x (+22.1%). Latency: 13.46ms → 11.02ms.
+- **Why it works**: L2's 2-pass backward architecture has 2*NT=128 grid iterations — 2x more than the standard single-pass backward (NT=64). The large iteration count means grid overhead is a significant fraction of total runtime even at ~13ms scale. Halving to 64 iterations saves substantial dispatch overhead.
+- **Key finding — spill tolerance**: Register spills INCREASED 14x (310K → 4.28M) and MXU utilization DROPPED 3.4x (5.6% → 1.66%). Despite these severe regressions, the 22% speedup from grid overhead reduction dominated. This proves grid overhead can be the binding constraint even when register pressure is severe.
+- **Contrast with L1**: L1's single-pass architecture (64 grid iterations) showed 0% benefit from 2-step unrolling (0.992x). The threshold for effective grid unrolling on this kernel appears to be >64 iterations.
+- **Extends**: SO18 (+5.6% at 2-step), SO19 (+8.0% at 4-step) — same mechanism, proven on a much larger kernel scale
+- **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 2
+
 ### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
 - **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
 - **Root cause**: The backward pass has 9 matmuls per sub-step (2 for A recompute + 1 for dA + 2 for dv + 2 for dq/dk inter + 2 for dq/dk intra), making each sub-step compute-heavy. Grid iteration overhead is a negligible fraction of backward time. The forward pass has only 4 matmuls per sub-step, making grid overhead a larger fraction.
