@@ -477,6 +477,7 @@
 - **Ultimate confirmation (Round 5)**: Extended across ALL source-level variations: Python for-loop unrolling (`for s in range(UNROLL)`), manual step-by-step unrolling, scratch buffer presence/absence (o_scratch_ref), shape-adaptive UNROLL=NT, forward-only vs both-pass unrolling, eager vs deferred b_h load — ALL compile to identical 8270 VLIW / 4656 MXU / 36100/35720 fills/spills at 4-step grid. Two completely independent lineages (L1 and L2) with different evolutionary histories produce identical compiled kernels when grid structure matches.
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 1
 - **Extended**: 2026-04-01, round 5 — definitive convergence across 25+ variants and 5 rounds
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 2 — Sub-tiling attention matrix [64,64] into three [32,32] sub-tiles produces identical latency (13.44ms) and spills (310K) despite +77% VLIW bundles (1652→2920) and +73% MXU ops (160→276). Compiler reconstructs the full computation from sub-tiles. Extends FP42 (K-split normalization) to M/N-split normalization.
 
 ### [FP40] bf16+DEFAULT for non-accumulating matmuls still exceeds atol=1.0 in gradient chains
 - **Symptom**: Casting 4 non-accumulating matmul inputs to bf16 with `Precision.DEFAULT` (A recomputation, dA_raw, dv_intra, dA_T) produced max_diff=1.294677734375, exceeding atol=1.0. Two independent implementations (L1 and L2 lineages) produced identical max_diff, confirming it's systematic.
@@ -545,3 +546,10 @@
 - **Root cause**: The backward pass has 9 matmuls per sub-step (2 for A recompute + 1 for dA + 2 for dv + 2 for dq/dk inter + 2 for dq/dk intra), making each sub-step compute-heavy. Grid iteration overhead is a negligible fraction of backward time. The forward pass has only 4 matmuls per sub-step, making grid overhead a larger fraction.
 - **Fix**: When applying grid unrolling to asymmetric kernels (forward lighter than backward), prioritize forward unrolling. Backward unrolling adds code complexity and register pressure for negligible benefit.
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
+
+### [FP46] BlockSpec block_shape dimensionality must exactly match out_shape for grid unrolling h_buf
+- **Symptom**: `ValueError: Block shape for outputs[4] (= (1, 1, 2, 128, 128)) must have the same number of dimensions as the array shape (10, 16, 32, 2, 128, 128)` — h_buf BlockSpec has 5 dimensions but out_shape creates a 6D array.
+- **Root cause**: When grid unrolling creates a multi-step h_buf with shape (B, H, NT_GROUPS, STEPS_PER_GROUP, K, V) = 6 dimensions, the BlockSpec block_shape must also be 6D. Using (1, 1, STEPS, K, V) = 5D misses the NT_GROUPS dimension. The index_map must return 6 values correspondingly: (b, h, group_idx, 0, 0, 0).
+- **Fix**: For N-step grid unrolling h_buf: block_shape = (1, 1, 1, N, K, V) with 6D index_map returning (b, h, block_idx, 0, 0, 0). Count the dimensions of the out_shape array and ensure block_shape has the same count.
+- **Extends**: FP17 (BlockSpec dimensions must match array dimensions). Same principle but specific to output buffers created via grid unrolling with multi-step structure.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 2 (3 variants: L2_grid_unroll_2step, L2_grid_unroll_4step, L2_fwd_bwd_unroll)
