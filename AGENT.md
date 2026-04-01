@@ -470,3 +470,16 @@
 - **Fix**: For kernels at this complexity level (~8K VLIW bundles, ~4.6K MXU ops, 2 fused pallas_calls), do NOT attempt source-level intermediate management optimizations. The only effective approaches are: (1) reducing total matmul count (algorithmic), (2) changing matmul dimensions (block sizes), (3) changing pallas_call architecture (grid, dimension_semantics), (4) changing the algorithm itself.
 - **Extends**: FP18 (source reordering), FP37 (dtype cast normalization)
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 1
+
+### [FP40] bf16+DEFAULT for non-accumulating matmuls still exceeds atol=1.0 in gradient chains
+- **Symptom**: Casting 4 non-accumulating matmul inputs to bf16 with `Precision.DEFAULT` (A recomputation, dA_raw, dv_intra, dA_T) produced max_diff=1.294677734375, exceeding atol=1.0. Two independent implementations (L1 and L2 lineages) produced identical max_diff, confirming it's systematic.
+- **Root cause**: Even "non-accumulating" matmuls propagate truncation error through the backward gradient chain. The bf16 A recomputation (dot(qg, kg.T) in bf16) introduces error in the attention weights, which flows into dA_raw → dv_intra → final gradients. Each bf16 truncation compounds, and 4 cascaded truncations push the accumulated error past atol=1.0. The hypothesis that "snapshot" (non-accumulated) matmuls can tolerate bf16 is wrong for this kernel's error budget.
+- **Fix**: Do NOT use bf16+DEFAULT for any matmuls in the gradient chain, even non-accumulating ones. The only safe precision reduction would be individual matmuls whose output is not used as input to another matmul, but in this kernel all matmuls are chained. Extends FP31 (Precision.DEFAULT causes correctness failure) and FP35 (bf16 for accumulating matmuls).
+- **First seen**: 2026-04-01, chunk_fused_kernels optimization round 2
+
+### [FP41] Structural changes to pallas_call I/O (adding/removing Refs) produce identical compiled kernels
+- **Symptom**: Adding A_masked as a forward-to-backward residual (extra output Ref in forward pallas_call, extra input Ref in backward pallas_call) to eliminate 1 backward matmul recomputation produced IDENTICAL compiled code: 8270 VLIW bundles, 4656 MXU ops, 24455/23435 fills/spills, 24 DMA — all exactly matching the baseline and all Round 1 variants.
+- **Root cause**: The Mosaic compiler's VLIW/MXU schedule is determined by the matmul dependency graph within the kernel body, not by the I/O structure (number of Refs, residual management). Adding a Ref to pass A_masked from forward to backward doesn't change the backward's internal computation graph — the compiler still generates the same code whether A is recomputed or loaded from a Ref, because both paths produce the same data dependencies.
+- **Fix**: Do NOT add/remove pallas_call Ref arguments as an optimization strategy. The compiler normalizes I/O changes to the same VLIW schedule. This extends FP39 from "source-level dataflow" to "pallas_call I/O structure."
+- **Extends**: FP39 (source-level restructuring produces identical VLIW/MXU)
+- **First seen**: 2026-04-01, chunk_fused_kernels optimization round 2
