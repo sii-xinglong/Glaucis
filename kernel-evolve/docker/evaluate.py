@@ -555,23 +555,37 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
     mxu0_count = 0
     mxu1_count = 0
 
-    llo_files = glob.glob(str(llo_dir / "**" / "*.txt"), recursive=True)
-    llo_files += glob.glob(str(llo_dir / "**" / "*.llo"), recursive=True)
+    # On v7x, actual VLIW LLO is in the mosaic/ dump directory
+    # (post-lower-to-llo, post-eliminate-llo-extensions), while the
+    # llo/ directory contains scheduled HLO and XLA JF passes. Check
+    # mosaic/ first for VLIW content, fall back to llo/ if needed.
+    mosaic_dir = dump_path / "mosaic"
+    llo_search_dirs = [mosaic_dir, llo_dir]
+
+    llo_files = []
+    for search_dir in llo_search_dirs:
+      llo_files += glob.glob(str(search_dir / "**" / "*.txt"), recursive=True)
+      llo_files += glob.glob(str(search_dir / "**" / "*.llo"), recursive=True)
 
     # Parse filename pattern: {hash}-{op_name}-{pass_num}-{pass_name}.txt
     # Also accepts .llo extension and dotted naming conventions.
+    # Mosaic files: {hash}-{pass_num}-mosaic-dump-{name}-{pass_name}.txt
     file_re = re.compile(r"^\d+-(.+?)-(\d+)-(.+)\.(?:txt|llo)$")
 
-    # Strategy: find the largest file among Pallas kernel final passes.
-    # Pallas ops are named pallas_tpu_*. Final passes include
-    # "final_bundles", "packed-bundles", "schedule-analysis".
+    # Strategy: find files containing actual VLIW instructions.
+    # Mosaic "post-lower-to-llo" / "post-eliminate-llo-extensions" files
+    # contain VLIW LLO. Files starting with "HloModule" are scheduled HLO.
     pallas_candidates = []
+    mosaic_candidates = []
     other_candidates = []
     for f in llo_files:
       basename = os.path.basename(f)
+      # Mosaic dump files with LLO content
+      if "mosaic-dump" in basename and ("lower-to-llo" in basename or "eliminate-llo" in basename):
+        mosaic_candidates.append((f, basename, 0, "mosaic"))
+        continue
       m = file_re.match(basename)
       if not m:
-        # Fallback: any LLO file is a candidate (sorted by size later)
         other_candidates.append((f, basename, 0, ""))
         continue
       op_name = m.group(1)
@@ -583,17 +597,35 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       elif "custom-call" in op_name or "custom_call" in op_name:
         other_candidates.append(entry)
 
-    # Pick the largest Pallas file (most likely to contain full LLO body)
+    # Priority: mosaic VLIW > pallas candidates > other candidates
+    # Pick the largest file in the highest-priority non-empty group.
     best_file = None
-    if pallas_candidates:
+    if mosaic_candidates:
+      mosaic_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
+      best_file = mosaic_candidates[0][0]
+      print(f"LLO: picked mosaic candidate: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
+    elif pallas_candidates:
       pallas_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
       best_file = pallas_candidates[0][0]
       print(f"LLO: picked pallas candidate: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
     elif other_candidates:
-      other_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
-      best_file = other_candidates[0][0]
-      print(f"LLO: picked other candidate: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
-    print(f"LLO: pallas_candidates={len(pallas_candidates)}, other_candidates={len(other_candidates)}", file=sys.stderr)
+      # Skip files that are actually scheduled HLO (contain 'HloModule')
+      real_llo = []
+      for entry in other_candidates:
+        with open(entry[0]) as fh:
+          head = fh.read(256)
+        if 'HloModule' not in head:
+          real_llo.append(entry)
+      if real_llo:
+        real_llo.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
+        best_file = real_llo[0][0]
+        print(f"LLO: picked non-HLO other candidate: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
+      else:
+        # Last resort: use the largest other candidate even if it's HLO
+        other_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
+        best_file = other_candidates[0][0]
+        print(f"LLO: picked HLO fallback: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
+    print(f"LLO: mosaic={len(mosaic_candidates)}, pallas={len(pallas_candidates)}, other={len(other_candidates)}", file=sys.stderr)
 
     if best_file is not None:
       with open(best_file) as fh:
@@ -719,11 +751,19 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
     hlo_files = glob.glob(str(hlo_dir / "**" / "*.txt"), recursive=True)
     hlo_files += glob.glob(str(hlo_dir / "**" / "*.hlo"), recursive=True)
 
-    # Prefer files with 'after' in name (optimized HLO)
+    # Prefer files with 'after' in name (optimized HLO), pick the largest
     after_files = [f for f in hlo_files if "after" in os.path.basename(f).lower()]
-    chosen_hlo = after_files[0] if after_files else (hlo_files[0] if hlo_files else None)
+    if after_files:
+      after_files.sort(key=lambda f: os.path.getsize(f), reverse=True)
+      chosen_hlo = after_files[0]
+    elif hlo_files:
+      hlo_files.sort(key=lambda f: os.path.getsize(f), reverse=True)
+      chosen_hlo = hlo_files[0]
+    else:
+      chosen_hlo = None
 
     if chosen_hlo is not None:
+      print(f"HLO: picked {os.path.basename(chosen_hlo)} ({os.path.getsize(chosen_hlo)} bytes) from {len(hlo_files)} files", file=sys.stderr)
       with open(chosen_hlo) as fh:
         hlo_text = fh.read()
 
