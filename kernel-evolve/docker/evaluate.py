@@ -533,11 +533,17 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       if M and K and N:
         flops = 6.0 * M * K * N * G
 
-    # Log dump file counts
+    # Log dump file counts and top files for debugging
     for label, d in [("hlo", hlo_dir), ("llo", llo_dir), ("mosaic", dump_path / "mosaic")]:
       d_path = Path(d)
-      count = sum(1 for _ in d_path.rglob("*") if _.is_file()) if d_path.exists() else 0
-      print(f"Dump dir [{label}]: {count} files", file=sys.stderr)
+      if not d_path.exists():
+        print(f"Dump dir [{label}]: does not exist", file=sys.stderr)
+        continue
+      all_files = [(f.stat().st_size, f) for f in d_path.rglob("*") if f.is_file()]
+      all_files.sort(key=lambda x: -x[0])
+      print(f"Dump dir [{label}]: {len(all_files)} files", file=sys.stderr)
+      for sz, fp in all_files[:5]:
+        print(f"  {sz:>10} bytes  {fp.name}", file=sys.stderr)
 
     # ── Parse LLO dumps ──────────────────────────────────────────────
     # LLO files are named: {hash}-{op_name}-{pass_num}-{pass_name}.txt
@@ -582,13 +588,21 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
     if pallas_candidates:
       pallas_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
       best_file = pallas_candidates[0][0]
+      print(f"LLO: picked pallas candidate: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
     elif other_candidates:
       other_candidates.sort(key=lambda e: os.path.getsize(e[0]), reverse=True)
       best_file = other_candidates[0][0]
+      print(f"LLO: picked other candidate: {os.path.basename(best_file)} ({os.path.getsize(best_file)} bytes)", file=sys.stderr)
+    print(f"LLO: pallas_candidates={len(pallas_candidates)}, other_candidates={len(other_candidates)}", file=sys.stderr)
 
     if best_file is not None:
       with open(best_file) as fh:
         llo_text = fh.read()
+      # Log first line and VLIW pattern presence for debugging
+      first_line = llo_text.split('\n', 1)[0][:120]
+      has_hlomod = 'HloModule' in llo_text[:256]
+      has_vliw = ';;' in llo_text or '.mxu' in llo_text
+      print(f"LLO: first_line={first_line!r}, is_hlo={has_hlomod}, has_vliw={has_vliw}, len={len(llo_text)}", file=sys.stderr)
       # Count VLIW bundles — multiple formats:
       #   Classic: separated by `;;`
       #   v7x libtpu: numbered entries like `  N  :  { ... }`
