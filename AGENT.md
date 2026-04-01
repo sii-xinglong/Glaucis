@@ -529,6 +529,7 @@
 - **Fix**: When register pressure is the dominant bottleneck (>100K spills, <10% MXU util), do NOT pursue pallas_call count reduction or HBM bandwidth optimization. Focus exclusively on reducing register pressure within kernel bodies: smaller block sizes, fewer live intermediates, simpler kernel body logic.
 - **Relationship**: Contrasts with SO14 (lax.scan→pallas_call) where launch overhead WAS the bottleneck. The difference: SO14's lax.scan had ~59ms PER-ITERATION dispatch overhead (host-device round-trip), while pallas_call grid iterations have negligible overhead when the kernel body itself is massive.
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 1
+- **Extended**: 2026-04-02, fused_chunk_simple_gla session 2 round 1 — bwd_2pass_split (split backward into dv+dh and dq+dk passes for per-kernel register pressure reduction) also showed 1.000x. Splitting does NOT reduce aggregate spills (still 310K total across passes). CSE/intermediate reduction (reduce_bwd_intermediates) produced identical VLIW/MXU (FP39), and fwd_bwd_fusion (save h from fwd kernel) increased peak memory 50% without speedup. Grid unrolling (SO20 approach) crashed from implementation bugs — should be retried with correct indexing.
 
 ### SO20: Grid unrolling on high-iteration-count backward (1.221x on fused_chunk_simple_gla)
 - **Optimization**: 2-step grid unrolling on L2's 2-pass backward kernel (128→64 grid iterations). Extends SO18/SO19 to a much larger kernel (~13ms total execution vs 0.05ms).
