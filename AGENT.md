@@ -73,13 +73,16 @@
 - **Rule**: Profile parsing logic needs to handle edge cases where computation events have overlapping or identical timestamps. Consider using the full trace window rather than just the last two events.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise iteration 1
 
-### FP5: stage_profile_deep produces all-null results when dump flags set mid-process (FIXED)
-- **What**: `stage_profile_deep` returns `ok: true` but all fields (`vliw_bundle_count`, `mxu_utilization`, `hbm_bandwidth_bytes`, `flops`, `arithmetic_intensity`) are null. No `.llo`, `.hlo`, or `.txt` dump files found.
-- **Why**: `import jax` at module level triggered libtpu initialization before `_setup_dump_env()` set `XLA_FLAGS`/`LIBTPU_INIT_ARGS`. libtpu reads these flags once at load time.
-- **Fix**: Deferred `import jax` from module level to inside `main()`, after `_setup_dump_env()` sets the env vars. The module sets `jax = None` and `main()` does `global jax; import jax` after dump env setup.
-- **Rule**: Never import jax at module level in evaluate.py. IR dump flags must be set BEFORE jax loads.
+### FP5: stage_profile_deep produces all-null results on TPU v7x (FIXED)
+- **What**: `stage_profile_deep` returns `ok: true` but all fields (`vliw_bundle_count`, `mxu_utilization`, `hbm_bandwidth_bytes`, etc.) are null.
+- **Root causes** (three issues):
+  1. `import jax` at module level triggered libtpu initialization before `_setup_dump_env()` set `XLA_FLAGS`/`LIBTPU_INIT_ARGS`. libtpu reads these flags once at load time.
+  2. LLO file parser searched only `llo/` dir. On v7x, VLIW LLO lives in `mosaic/` dump dir (`post-lower-to-llo.txt`, `post-eliminate-llo-extensions.txt`). The `llo/` dir contains scheduled HLO.
+  3. v7x uses MLIR LLO format (not classic `;;`-delimited VLIW). Parsers for MXU ops (`.mxu0`/`.mxu1`), VMEM (`#allocation`), DMA (`dma.*`), bundle density (`;;`), and special units didn't match MLIR patterns.
+- **Fix**: Deferred `import jax` to `main()` after dump env setup. LLO parser searches `mosaic/` first. All metric parsers updated for MLIR patterns (`llo.vmatmul`, `llo.vector_load/store`, `memref<...memory_space<vmem>>`, `llo.vxpose`, `llo.vdwg`).
+- **Rule**: Never import jax at module level in evaluate.py. IR dump flags must be set BEFORE jax loads. LLO parser must handle both classic VLIW and MLIR formats.
 - **First seen**: 2026-03-30, gmm_fp8_blockwise iteration 1
-- **Fixed**: 2026-04-01
+- **Fixed**: 2026-04-01, PR #72
 
 ### FP3: M=2048 + N=512 tiling causes VMEM regression
 - **What**: Setting fwd tiling to (2048, 512, 128) regresses from 1.621x to 1.512x despite fewer grid tiles.
