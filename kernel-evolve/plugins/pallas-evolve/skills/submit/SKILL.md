@@ -268,3 +268,11 @@ kubectl delete configmap ${JOB_NAME}-payload --ignore-not-found
 - If a variant has no matching `EVAL_RESULT:` in the logs: save a synthetic COMPILE_ERROR for that variant
 - Partial results are acceptable — some variants may succeed while others fail
 - Always run cleanup step (Step 9) regardless of outcome
+
+### Step 10: Context note
+
+All evaluation results have been distributed to per-variant `eval_result.json` files, artifacts downloaded, and K8s resources cleaned up.
+
+**Do NOT compact here** — this skill is typically invoked within the `pallas-evolve:start` loop (Phase 2), and the subsequent Phase 3 (ANALYZE) needs orchestration context (iteration number, run directory) to locate results. The start loop manages compaction at Phase 5.
+
+If invoked **standalone** (outside the start loop), invoke `/compact` after this skill completes — the K8s Job logs, base64 payload, and polling output are no longer needed in context.

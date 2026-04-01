@@ -195,3 +195,11 @@ These signals are available in `eval_result.json` under `metadata.profile`:
 - `hbm_capacity_utilization_pct`: Peak HBM memory usage as % of 192 GB capacity. High values mean large buffer allocations — check for redundant intermediates.
 
 **When analyzing iteration results, check all signals — not just speedup and compute_ratio. VLIW bundle count and MXU dual_ratio are leading indicators of kernel quality.**
+
+### Step 9: Context note
+
+The profile brief has been written to `{ARTIFACTS_DIR}/profile_brief.md`. All extracted insights from the raw LLO/HLO/trace files are now captured in the brief.
+
+**Do NOT compact here** — this skill is typically invoked within the `pallas-evolve:start` loop (Phase 0), and the caller needs the profile brief content for Phase 1 (THINK). The start loop manages compaction at Phase 5.
+
+If invoked **standalone** (outside the start loop), invoke `/compact` after this skill completes — the raw IR contents (which can be thousands of lines) are no longer needed in context.
