@@ -483,3 +483,19 @@
 - **Fix**: Do NOT add/remove pallas_call Ref arguments as an optimization strategy. The compiler normalizes I/O changes to the same VLIW schedule. This extends FP39 from "source-level dataflow" to "pallas_call I/O structure."
 - **Extends**: FP39 (source-level restructuring produces identical VLIW/MXU)
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 2
+
+### [FP42] Splitting matmul dimensions (K-split) is normalized by Mosaic compiler to identical VLIW/MXU
+- **Symptom**: Splitting ALL 13 matmuls from [64,128]@[128,64] into two [64,64]@[64,64] sub-matmuls (K=128 → 2x K/2=64) produced IDENTICAL compiled kernel: 8270 VLIW bundles, 4656 mxu0 ops, dual_ratio=0.0 — same as baseline. Register spills decreased 34% (16080/16065 vs 24455/23435) but speedup was 0.997x (no improvement).
+- **Root cause**: The Mosaic compiler recognizes that two consecutive partial-reduction matmuls on the same operands can be merged into a single larger matmul. The compiler reconstructs the original [64,128]@[128,64] operation from the two [64,64]@[64,64] halves. This is an extreme extension of FP39: the compiler normalizes not just intermediate management but also matmul dimension changes.
+- **Fix**: Do NOT split matmul dimensions to try to change the compiled VLIW/MXU schedule. The compiler will merge them back. The only way to change the compiled schedule is to change the GRID structure (number of iterations, pallas_call count), not the operation-level structure within a single kernel body.
+- **Extends**: FP39 (source-level restructuring), FP41 (I/O structure changes)
+- **First seen**: 2026-04-01, chunk_fused_kernels optimization round 3
+
+### SO18: Grid iteration reduction via multi-step unrolling (1.223x — +5.6% breakthrough)
+- **Optimization**: Process 2 time steps per grid iteration instead of 1. Changed grid from (B, H, 1, 1, NT) to (B, H, 1, 1, NT//2). Input BlockSpecs load 2*BT rows per iteration. Kernel body manually processes sub-step 0 (rows [0, BT)) then sub-step 1 (rows [BT, 2*BT)) with h state updated between them. h output BlockSpec covers 2 NT slots per iteration.
+- **Impact**: 1.158x → 1.223x (+5.6%). MXU util improved +4.9pp (22.8% → 27.7%). Latency: 0.0542ms → 0.0508ms.
+- **Why it works**: The compiled kernel body is IDENTICAL (8270 VLIW bundles, 4656 MXU ops, dual_ratio=0.0) — but halving grid iterations reduces pipeline flush/fill overhead between iterations. At this kernel scale (0.05ms total), inter-iteration overhead is ~6% of total runtime. The speedup comes entirely from amortizing grid overhead, not from better kernel body compilation.
+- **Trade-off**: Register spills increased +27-38% (30975/32435 vs 24455/23435) due to double the work per iteration. Despite more spills, the reduced iteration overhead dominates.
+- **Applicable when**: A Pallas kernel with "arbitrary" time dimension has small per-iteration compute relative to grid overhead. Multi-step unrolling amortizes overhead. Requires NT % unroll_factor == 0.
+- **Next step**: Try 4-step unrolling (NT/4 iterations). For T=256/BT=64, NT=4, so 4-step = 1 iteration total (eliminate ALL grid overhead).
+- **First seen**: 2026-04-01, chunk_fused_kernels optimization round 3
