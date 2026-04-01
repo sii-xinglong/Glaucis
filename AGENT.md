@@ -545,6 +545,7 @@
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 2
 - **Updated**: 2026-04-02, round 3 — forward-only achieves same speedup as combined fwd+bwd
 - **Updated**: 2026-04-02, round 4 — 4-step forward achieves 1.388x; backward simplicity is critical at >=4-step
+- **Updated**: 2026-04-02, round 5 — L1_fwd_4step (split backward: separate dv+dh and dq+dk passes) achieves 1.388x, IDENTICAL to L3_fwd_4step (simple two-phase backward). Compiles to same forward kernel (`_fused_chunk_fwd_4step_kernel`, iteration_bounds=[10,16,1,1,16], VLIW=5275, MXU=640). Proves 4-step technique transfer is fully architecture-independent: backward architecture choice (split vs simple vs combined) does NOT affect forward unrolling benefit. FP48 interference is about backward COMPLEXITY (unrolling), not backward architecture.
 
 ### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
 - **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
@@ -575,3 +576,10 @@
 - **Fix**: When pushing forward grid unrolling beyond 2-step, keep backward kernel as SIMPLE as possible (no backward unrolling). Use the simplest backward code path as the base for aggressive forward unrolling. This is the opposite of intuition — more backward unrolling is actively harmful at high forward unrolling.
 - **Evidence**: L3 base (forward-only 2-step, no backward unrolling) → 1.388x at 4-step forward. L2 base (forward+backward 2-step) → 1.222x at 4-step forward. Same compiled forward kernel, different total latency (9.687ms vs 11.006ms).
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 4
+
+### [FP49] fori_loop inside Pallas forward kernels regresses performance vs manual grid unrolling
+- **Symptom**: `jax.lax.fori_loop(0, N, body, ...)` for N-step forward grid unrolling achieves only 1.19-1.21x, while manual N-step unrolling achieves 1.388x. Three variants tested: fori_loop 4-step (1.194x), fori_loop 8-step (1.194x), fori_loop 16-step (1.212x) — all significantly worse than manual 4-step (1.388x).
+- **Root cause**: fori_loop compiles to a compact runtime loop rather than straight-line code. The profiler captured the backward kernel as the larger module (VLIW=2663 for backward vs smaller forward), confirming the fori_loop forward kernel is much smaller than manual unrolling (VLIW=5275). While this dramatically reduces register pressure (500K vs 6.3M spills), it prevents the Mosaic compiler from optimizing ACROSS sub-steps. Manual unrolling exposes all sub-step computations (matmuls, accumulations, gating) as a single straight-line body, enabling inter-step instruction scheduling, operand reuse, and pipeline optimization that fori_loop cannot access. The inter-step optimization benefit vastly exceeds the register pressure cost.
+- **Fix**: Use manual unrolling for forward grid iteration reduction, NOT `jax.lax.fori_loop`. The FP23 suggestion to use fori_loop to "hide iterations from the compiler" is counterproductive for grid unrolling — the compiler NEEDS visibility into all sub-steps to optimize effectively. fori_loop is only appropriate when the loop body has no cross-iteration optimization opportunity (e.g., independent iterations).
+- **Extends**: FP30 (fori_loop + lax.cond bad). **Contradicts FP23** (which suggested fori_loop for register pressure — this is wrong for forward grid unrolling where inter-step optimization dominates).
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 5
