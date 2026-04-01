@@ -429,11 +429,11 @@
 - **Extended**: 2026-03-31, round 9 — Phase reordering (merge_A_dA) achieved -17.7% spills and -22.0% fills but REGRESSED MXU util -6.0pp (32.1%→26.1%), confirming that even dramatic spill reduction harms performance when it disrupts MXU scheduling
 
 ### [FP35] bf16 precision for accumulating matmuls causes correctness failure (extends FP31)
-- **Symptom**: Selectively using bf16 operands with `lax.Precision.DEFAULT` for the dh update matmul (`q_hat.T @ do` in Phase 6 backward) and forward h update (`k.T @ v_gated`) produces max_diff=22.28 (atol=10.0).
+- **Symptom**: Selectively using bf16 operands with `lax.Precision.DEFAULT` for the dh update matmul (`q_hat.T @ do` in Phase 6 backward) and forward h update (`k.T @ v_gated`) produces max_diff=22.28 (atol=10.0). Replacing ALL 4 Precision.HIGHEST matmuls with Precision.DEFAULT produces max_diff=57.54 >> atol=10.0.
 - **Root cause**: The dh state accumulates across 64 time steps (T/chunk_size = 4096/64 = 64). Each time step's bf16 truncation error compounds through sequential state propagation. Unlike FP31 (global Precision.DEFAULT), this applied bf16 to ONLY the state-accumulating matmuls while keeping f32/HIGHEST for all others — but the accumulation makes even selective bf16 unsafe.
 - **Fix**: Any matmul whose output feeds into cross-time-step state accumulation MUST use f32 operands with Precision.HIGHEST. bf16 is ONLY safe for matmuls producing point-in-time values consumed without accumulation (see SO17). The rule: accumulated → f32; snapshot → bf16 OK.
-- **Extends**: FP31 (global Precision.DEFAULT fails) — this shows that selective bf16 for accumulating matmuls also fails.
-- **First seen**: 2026-03-31, chunk_gla optimization round 9
+- **Extends**: FP31 (global Precision.DEFAULT fails) — this shows that selective bf16 for accumulating matmuls also fails. Round 7 confirmed even with relaxed atol=10.0, 4-matmul DEFAULT produces 57.54 max_diff.
+- **First seen**: 2026-03-31, chunk_gla optimization round 9. Extended 2026-04-02, fused_chunk_simple_gla round 7
 
 ### [FP36] VPU exp() optimization by manual CSE is negligible — compiler already optimizes
 - **Symptom**: Reducing exp() calls from 5 to 3 per backward time step (by deriving exp_gn_minus from existing values and reusing exp_pos) produced only -0.2% VLIW reduction (-19 bundles) and -0.3% speedup regression. Vector EUP util dropped 0.07pp.
@@ -591,6 +591,19 @@
 - **Fix**: Forward grid unrolling MUST stop at 4-step for this kernel. The diminishing returns curve (22.2pp at 2-step, 16.6pp at 4-step, -7.4pp at 8-step) has definitively crossed the break-even point. Do NOT try 8-step, 16-step, or higher forward unrolling.
 - **Extends**: SO20 (grid unrolling progression now has upper bound), SO18/SO19 (4-step remains optimal)
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 6
+
+### [FP51] Storing h from forward to eliminate backward Phase 1 provides zero speedup
+- **Symptom**: Forward stores h state at 64 chunk boundaries to h_buf output Ref (f32 or bf16). Backward reads stored h and eliminates Phase 1 (h-propagation), reducing backward iterations from 128 (64 Phase 1 + 64 Phase 2) to 64 (Phase 2 only). Despite 50% backward iteration reduction, speedup is 1.3848x vs baseline 1.388x — within noise, zero improvement. Compound variant (h-storage + backward 2-step unrolling, 128→32 iterations) also gives 1.3846x — still zero improvement.
+- **Root cause**: Backward Phase 1 (h-propagation) has only 1 matmul per step (h = g * h + k.T @ v), so grid iteration overhead dominates — but Phase 1's total time is already negligible compared to Phase 2's 9 matmuls per step. Eliminating Phase 1 (64 cheap iterations) saves almost nothing because the backward is dominated by Phase 2 compute. This is the inverse of the forward (2 matmuls/step → grid overhead dominates → unrolling helped).
+- **Fix**: Do NOT attempt to optimize backward by reducing iteration count. The backward bottleneck is per-iteration compute (9 matmuls), NOT grid overhead. Neither h-storage, Phase 1 elimination, backward unrolling, nor iteration count reduction will improve backward performance.
+- **Extends**: FP43 (backward unrolling negligible) — this provides the definitive explanation: backward per-iteration compute (9 matmuls) dominates, making any iteration count reduction approach futile.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 7
+
+### [FP52] BT=128 chunk size narrowly fails correctness (max_diff=10.22 > atol=10.0)
+- **Symptom**: Doubling chunk_size from 64 to 128 with no kernel body changes (fully parameterized by BT) produces max_diff=10.22, narrowly exceeding atol=10.0. Fails specifically on B=12 shape.
+- **Root cause**: Larger attention matrix [128,128] (vs [64,64]) changes floating-point accumulation order. The 4x larger matrix (16,384 vs 4,096 elements) introduces enough numerical difference from different reduction ordering. BT=128 might work with slightly relaxed atol (~15) but fails at the configured atol=10.0.
+- **Fix**: BT=128 is NOT safe at atol=10.0 for this kernel. Do not attempt without relaxing atol. BT=64 is the maximum safe chunk size.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 7
 
 ### SO21: Python `for step in range(N)` compiles identically to manual unrolling in Pallas
 - **Optimization**: Replace N manually copy-pasted sub-step blocks in Pallas kernel body with `for step in range(N): body(step)` Python loop. Tested at 4-step and 8-step levels.
