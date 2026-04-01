@@ -546,6 +546,7 @@
 - **Updated**: 2026-04-02, round 3 — forward-only achieves same speedup as combined fwd+bwd
 - **Updated**: 2026-04-02, round 4 — 4-step forward achieves 1.388x; backward simplicity is critical at >=4-step
 - **Updated**: 2026-04-02, round 5 — L1_fwd_4step (split backward: separate dv+dh and dq+dk passes) achieves 1.388x, IDENTICAL to L3_fwd_4step (simple two-phase backward). Compiles to same forward kernel (`_fused_chunk_fwd_4step_kernel`, iteration_bounds=[10,16,1,1,16], VLIW=5275, MXU=640). Proves 4-step technique transfer is fully architecture-independent: backward architecture choice (split vs simple vs combined) does NOT affect forward unrolling benefit. FP48 interference is about backward COMPLEXITY (unrolling), not backward architecture.
+- **Updated**: 2026-04-02, round 6 — **4-step is the CEILING**. 8-step manual unrolling REGRESSES to 1.314x (-7.4pp from 1.388x). Two genuine measurements confirm (L1_fwd_8step=10.228ms, L3_fwd_8step_pyloop=10.229ms). Code bloat (VLIW 5275→10403) exceeds grid reduction benefit (16→8 iterations). See FP50. Grid unrolling optimization direction is exhausted.
 
 ### [FP43] Backward grid unrolling has negligible impact on compute-heavy backward passes
 - **Symptom**: L1_bwd_only_four_step (forward=2-step, backward=4-step) achieved only 1.225x — a mere +0.16% over L1's 1.223x (forward=2-step, backward=2-step). Meanwhile L1_fwd_only_four_step (forward=4-step, backward=2-step) achieved 1.317x (+7.7%).
@@ -583,3 +584,18 @@
 - **Fix**: Use manual unrolling for forward grid iteration reduction, NOT `jax.lax.fori_loop`. The FP23 suggestion to use fori_loop to "hide iterations from the compiler" is counterproductive for grid unrolling — the compiler NEEDS visibility into all sub-steps to optimize effectively. fori_loop is only appropriate when the loop body has no cross-iteration optimization opportunity (e.g., independent iterations).
 - **Extends**: FP30 (fori_loop + lax.cond bad). **Contradicts FP23** (which suggested fori_loop for register pressure — this is wrong for forward grid unrolling where inter-step optimization dominates).
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 5
+
+### [FP50] 8-step forward grid unrolling regresses from 4-step — 4-step is the ceiling
+- **Symptom**: Manual 8-step forward grid unrolling achieves 1.314x, a -7.4pp regression from 4-step's 1.388x. Latency increases from 9.687ms to 10.228ms despite halving grid iterations (16→8). Two independent genuine measurements confirm: L1_fwd_8step (1.314x, first in batch) and L3_fwd_8step_pyloop (1.315x, unique timing tier).
+- **Root cause**: At 8-step, code complexity doubles (VLIW 5,275→10,403, LLO 10K→21K lines, DMA 464→912) but grid iterations only halve (16→8). The code bloat penalty exceeds the grid reduction benefit. Paradoxically, register spills are LOWER at 8-step (5.6M vs 6.3M at 4-step), suggesting the compiler reorganizes allocation with larger windows — but MXU utilization drops dramatically (0.44%→0.16%), indicating the doubled code complexity prevents efficient MXU scheduling. 16-step (VLIW=20,659, 41K LLO lines) has leaked profiling but is almost certainly worse.
+- **Fix**: Forward grid unrolling MUST stop at 4-step for this kernel. The diminishing returns curve (22.2pp at 2-step, 16.6pp at 4-step, -7.4pp at 8-step) has definitively crossed the break-even point. Do NOT try 8-step, 16-step, or higher forward unrolling.
+- **Extends**: SO20 (grid unrolling progression now has upper bound), SO18/SO19 (4-step remains optimal)
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 6
+
+### SO21: Python `for step in range(N)` compiles identically to manual unrolling in Pallas
+- **Optimization**: Replace N manually copy-pasted sub-step blocks in Pallas kernel body with `for step in range(N): body(step)` Python loop. Tested at 4-step and 8-step levels.
+- **Impact**: L3_fwd_4step_pyloop achieves identical metrics to manual L3_fwd_4step: VLIW=5,275, MXU=640, fills=6,762,360, spills=6,326,905, latency=9.687ms. LLO line count identical (10,457). L3_fwd_8step_pyloop also matches manual L3_fwd_8step (VLIW=10,403, MXU=1,280). Both confirmed at sub-millisecond timing precision (stddev <0.001ms).
+- **Why it works**: Python `for` loops are unrolled at JAX trace time — JAX traces through each iteration, producing the same flat dataflow graph as manual copy-paste. This is fundamentally different from `jax.lax.fori_loop` (FP49), which compiles to a runtime loop that hides iterations from the compiler.
+- **Applicable when**: Any Pallas kernel using manual copy-paste for grid unrolling sub-steps. Replace with Python `for step in range(N)` for cleaner, more maintainable code with zero performance cost. This enables higher unrolling levels (8-step, 16-step) without code maintenance burden.
+- **Contradicts**: The implicit assumption that manual copy-paste might compile differently than Python loops. It does not — JAX trace-time unrolling produces identical compiled output.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 6
