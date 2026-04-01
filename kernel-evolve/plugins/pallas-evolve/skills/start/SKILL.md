@@ -121,6 +121,9 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
    - `dual_ratio < 0.5` → single-MXU
    - `arithmetic_intensity < 10` → low arithmetic intensity
    - `vector_spills > 0` → register pressure
+   - `vmem_utilization_pct < 30` → VMEM underutilized (room to increase block sizes)
+   - `vmem_utilization_pct > 90` → VMEM near capacity (OOM risk)
+   - `hbm_capacity_utilization_pct > 50` → high HBM allocation
    - `scalar_alu_util_pct > mxu_util_pct` → scalar-heavy
    - Check combined patterns (see analyze skill for full table)
 
@@ -128,6 +131,9 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
    - Memory-bound → prioritize K-tiling, scratch memory, double buffering
    - Compute-bound + low dual_ratio → prioritize MXU dual scheduling
    - Register pressure → prioritize smaller blocks, fewer intermediates
+   - VMEM underutilized (<30%) + memory-bound → increase block sizes, add scratch memory to improve on-chip data reuse
+   - VMEM near capacity (>90%) → do not increase blocks, reduce intermediates
+   - High HBM allocation (>50%) → eliminate redundant buffers, use in-place updates
    - Low ILP (avg_ops_per_bundle < 2) → simplify kernel for better VLIW packing
    - High scalar ALU → reduce index computation, simplify control flow
 
@@ -135,6 +141,8 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
    - If already compute-bound (compute_ratio > 0.8), don't add more pipelining/prefetch
    - If dual_ratio > 0.9, don't focus on MXU utilization
    - If no register spills and VMEM usage is low, don't reduce block sizes
+   - If `vmem_utilization_pct > 90`, don't increase block sizes or add scratch buffers
+   - If `vmem_utilization_pct < 30` and memory-bound, don't reduce block sizes (VMEM has headroom to grow)
 
 7. Write the profile brief using this template:
 
@@ -165,6 +173,8 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
    | HBM bandwidth | {bytes} | {utilization_pct}% of 3690 GB/s peak |
    | Arithmetic intensity | {AI} FLOPs/byte | {low(<10)/medium(10-50)/high(>50)} |
    | Compute efficiency | {pct}% | of 2307 TFLOPS peak |
+   | VMEM utilization | {vmem_pct}% of 64 MiB | {low(<30)/medium(30-70)/good(70-90)/critical(>90)} |
+   | HBM capacity used | {hbm_cap_pct}% of 192 GB ({peak_memory_mb} MB) | {low/medium/high(>50)} |
    | DMA transfers | {count} | {double_buffered: yes/no} |
    | Pipeline NOPs | {nop_count} | {low(<10)/medium(10-50)/high(>50)} |
 
@@ -214,6 +224,8 @@ Generate a `profile_brief.md` from raw profiling artifacts. This procedure is us
    | VLIW bundles | {base} | {curr} | {+/-} |
    | MXU dual ratio | {base} | {curr} | {+/-} |
    | Register spills | {base} | {curr} | {+/-} |
+   | VMEM utilization | {base}% | {curr}% | {+/-} |
+   | HBM capacity | {base} MB | {curr} MB | {+/-} |
    ```
 
 ## Optimization Loop
@@ -467,5 +479,7 @@ When writing kernel mutations, follow these TPU v7x Ironwood constraints:
 - `hbm_bandwidth_bytes`: Total HBM memory traffic per invocation. Lower = better. Pallas should keep data in VMEM to avoid HBM round-trips.
 - `arithmetic_intensity` (FLOPs/byte): Higher means more compute per byte of memory traffic. Low values indicate memory-bound behavior.
 - `compute_efficiency_pct`: Actual throughput vs TPU v7x peak (275 TFLOPS BF16). Shows headroom for optimization.
+- `vmem_utilization_pct`: On-chip VMEM usage as % of 64 MiB capacity. Higher is better (more on-chip reuse). <30% = underutilized, >90% = near OOM.
+- `hbm_capacity_utilization_pct`: Peak HBM memory usage as % of 192 GB capacity. High values mean large buffer allocations — check for redundant intermediates.
 
 **When analyzing iteration results, check all signals — not just speedup and compute_ratio. VLIW bundle count and MXU dual_ratio are leading indicators of kernel quality.**
