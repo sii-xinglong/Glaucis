@@ -156,6 +156,7 @@ After restarting, check that all pallas-evolve skills appear in the session's av
 
 ```
 /pallas-evolve:init-kernel <name>      # Initialize a kernel project from upstream
+/pallas-evolve:profile-brief           # Generate a profile brief from TPU eval artifacts
 /pallas-evolve:start <config.yaml>     # Start an optimization session
 /pallas-evolve:submit                  # Submit variants for TPU evaluation
 /pallas-evolve:analyze                 # Analyze evaluation results

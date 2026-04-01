@@ -104,7 +104,7 @@ pip install -e ".[profile]"   # xprof for trace analysis
 
 ### 2. Install the pallas-evolve skill plugin
 
-The `pallas-evolve` plugin ships with 4 skills (`start`, `submit`, `analyze`, `reflect`) that drive the optimization loop inside Claude Code.
+The `pallas-evolve` plugin ships with 6 skills that drive the optimization loop inside Claude Code.
 
 **Option A: Local plugin (for development)**
 
@@ -136,6 +136,8 @@ Launch Claude Code in the project directory. You should see these skills availab
 
 | Skill | Purpose |
 |-------|---------|
+| `pallas-evolve:init-kernel` | Initialize a kernel project from upstream |
+| `pallas-evolve:profile-brief` | Generate a profile brief from TPU eval artifacts |
 | `pallas-evolve:start` | Start an optimization session |
 | `pallas-evolve:submit` | Submit a batch of variants for TPU eval |
 | `pallas-evolve:analyze` | Analyze batch evaluation results |
