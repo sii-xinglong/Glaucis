@@ -45,6 +45,7 @@ def batch_dispatch(
       "shapes": shapes,
       "rtol": rtol,
       "atol": atol,
+      "metadata": variant.get("metadata", {}),
     }
     b64 = base64.b64encode(json.dumps(single_payload).encode()).decode()
 

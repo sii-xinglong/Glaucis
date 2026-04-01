@@ -9,6 +9,7 @@ from kernel_evolve.evaluator import (
   BatchEvalResult,
   EvalResult,
 )
+from kernel_evolve.tuning import TuningConfig, TuningParam, expand_variants
 
 
 def test_full_batch_data_flow():
@@ -71,3 +72,69 @@ def test_full_batch_data_flow():
 
   # Best
   assert batch_result.best().speedup == 1.5
+
+
+def test_tuning_expansion_through_batch_pipeline():
+  """End-to-end: expand variants with tuning configs, build batch request, verify metadata."""
+  # Define tuning config
+  tc = TuningConfig(
+    params={
+      "BLOCK_K": TuningParam(values=[64, 128]),
+      "BLOCK_V": TuningParam(values=[32, 64]),
+    },
+    constraints=["BLOCK_K >= BLOCK_V"],
+  )
+
+  # Two LLM-generated code variants
+  v1_code = "BLOCK_K = 256\nBLOCK_V = 256\ndef kernel_v1(): pass\n"
+  v2_code = "BLOCK_K = 512\nBLOCK_V = 128\ndef kernel_v2(): pass\n"
+
+  # Expand
+  expanded = expand_variants([v1_code, v2_code], tc)
+  # 4 configs (all pass constraint: 64>=32, 64>=64, 128>=32, 128>=64) * 2 variants = 8
+  assert len(expanded) == 8
+
+  # Build BatchEvalRequest with metadata
+  variants_for_batch = []
+  code_variants = [("L1_v1", v1_code), ("L2_v2", v2_code)]
+  for code_variant_id, original_code in code_variants:
+    variant_expanded = expand_variants([original_code], tc)
+    for idx, (modified_code, cfg) in enumerate(variant_expanded):
+      variants_for_batch.append({
+        "variant_id": f"{code_variant_id}_t{idx}",
+        "kernel_code": modified_code,
+        "metadata": {
+          "tuning_config": cfg,
+          "code_variant_id": code_variant_id,
+        },
+      })
+
+  batch = BatchEvalRequest(
+    reference_code="ref",
+    shapes=[{"M": 1024}],
+    variants=variants_for_batch,
+  )
+
+  # Verify batch decomposes correctly
+  singles = batch.to_single_requests()
+  assert len(singles) == 8
+
+  # Check metadata flows through
+  for req in singles:
+    assert "tuning_config" in req.metadata
+    assert "code_variant_id" in req.metadata
+
+  # Check specific variant: metadata and code substitution
+  t0 = next(r for r in singles if r.variant_id == "L1_v1_t0")
+  assert t0.metadata["code_variant_id"] == "L1_v1"
+  assert t0.metadata["tuning_config"] == {"BLOCK_K": 64, "BLOCK_V": 32}
+
+  # Verify kernel code was actually modified by apply_config
+  assert "BLOCK_K = 64" in t0.kernel_code
+  assert "BLOCK_V = 32" in t0.kernel_code
+  assert "def kernel_v1" in t0.kernel_code  # original code structure preserved
+
+  # Verify payload roundtrip
+  encoded = batch.encode_b64()
+  decoded = json.loads(base64.b64decode(encoded).decode())
+  assert decoded["variants"][0]["metadata"]["tuning_config"] is not None

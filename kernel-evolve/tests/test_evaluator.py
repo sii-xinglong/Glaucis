@@ -161,3 +161,103 @@ def test_batch_eval_result_best_returns_none_when_all_failed():
   batch = BatchEvalResult(results={"v1": r1, "v2": r2})
   assert batch.best() is None
   assert batch.ranked() == []
+
+
+def test_eval_request_metadata_default():
+  """EvalRequest has empty metadata by default."""
+  req = EvalRequest(
+    variant_id="v1",
+    kernel_code="code",
+    reference_code="ref",
+    shapes=[{"M": 1024}],
+  )
+  assert req.metadata == {}
+
+
+def test_eval_request_metadata_roundtrip():
+  """EvalRequest metadata survives to_dict/from_dict roundtrip."""
+  req = EvalRequest(
+    variant_id="v1",
+    kernel_code="code",
+    reference_code="ref",
+    shapes=[{"M": 1024}],
+    metadata={
+      "tuning_config": {"BLOCK_K": 256, "BLOCK_V": 128},
+      "code_variant_id": "L1_v1",
+    },
+  )
+  d = req.to_dict()
+  assert d["metadata"]["tuning_config"] == {"BLOCK_K": 256, "BLOCK_V": 128}
+  assert d["metadata"]["code_variant_id"] == "L1_v1"
+
+  restored = EvalRequest.from_dict(d)
+  assert restored.metadata == req.metadata
+
+
+def test_eval_request_metadata_b64_roundtrip():
+  """EvalRequest metadata survives encode_b64/decode_b64 roundtrip."""
+  req = EvalRequest(
+    variant_id="v1",
+    kernel_code="code",
+    reference_code="ref",
+    shapes=[{"M": 1024}],
+    metadata={"tuning_config": {"BLOCK_K": 64}},
+  )
+  encoded = req.encode_b64()
+  restored = EvalRequest.decode_b64(encoded)
+  assert restored.metadata == {"tuning_config": {"BLOCK_K": 64}}
+
+
+def test_eval_request_backward_compat():
+  """EvalRequest.from_dict works without metadata key (backward compat)."""
+  data = {
+    "variant_id": "v1",
+    "kernel_code": "code",
+    "reference_code": "ref",
+    "shapes": [{"M": 1024}],
+  }
+  req = EvalRequest.from_dict(data)
+  assert req.metadata == {}
+
+
+def test_batch_eval_request_variants_with_metadata():
+  """BatchEvalRequest.to_single_requests forwards variant metadata."""
+  batch = BatchEvalRequest(
+    reference_code="ref",
+    shapes=[{"M": 1024}],
+    variants=[
+      {
+        "variant_id": "L1_v1_t0",
+        "kernel_code": "code1",
+        "metadata": {
+          "tuning_config": {"BLOCK_K": 64},
+          "code_variant_id": "L1_v1",
+        },
+      },
+      {
+        "variant_id": "L1_v1_t1",
+        "kernel_code": "code2",
+        "metadata": {
+          "tuning_config": {"BLOCK_K": 128},
+          "code_variant_id": "L1_v1",
+        },
+      },
+    ],
+  )
+  singles = batch.to_single_requests()
+  assert len(singles) == 2
+  assert singles[0].metadata["tuning_config"] == {"BLOCK_K": 64}
+  assert singles[1].metadata["tuning_config"] == {"BLOCK_K": 128}
+
+
+def test_batch_eval_request_variants_without_metadata():
+  """BatchEvalRequest.to_single_requests works without metadata (backward compat)."""
+  batch = BatchEvalRequest(
+    reference_code="ref",
+    shapes=[{"M": 1024}],
+    variants=[
+      {"variant_id": "v1", "kernel_code": "code1"},
+    ],
+  )
+  singles = batch.to_single_requests()
+  assert singles[0].metadata == {}

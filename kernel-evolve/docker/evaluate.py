@@ -716,6 +716,7 @@ def main():
   else:
     parser.error("--eval-payload or --eval-payload-file is required")
   request = decode_request(b64_payload)
+  request_metadata = request.get("metadata", {})
   job_name = request.get("variant_id", "unknown")
 
   if not _has_tpu():
@@ -724,7 +725,7 @@ def main():
 
   compile_result = stage_compile(request["kernel_code"])
   if not compile_result["ok"]:
-    err = {"status": "COMPILE_ERROR", "variant_id": job_name, "error": compile_result["error"]}
+    err = {"status": "COMPILE_ERROR", "variant_id": job_name, "error": compile_result["error"], "metadata": request_metadata}
     print(f"EVAL_RESULT:{json.dumps(err)}")
     sys.exit(0)
 
@@ -742,13 +743,14 @@ def main():
       "variant_id": job_name,
       "error": correct_result["error"],
       "max_diff": correct_result["max_diff"],
+      "metadata": request_metadata,
     }
     print(f"EVAL_RESULT:{json.dumps(result_data)}")
     sys.exit(0)
 
   perf_result = stage_performance(compile_result["globals"], request["shapes"])
   if not perf_result["ok"]:
-    err = {"status": "COMPILE_ERROR", "variant_id": job_name, "error": perf_result["error"]}
+    err = {"status": "COMPILE_ERROR", "variant_id": job_name, "error": perf_result["error"], "metadata": request_metadata}
     print(f"EVAL_RESULT:{json.dumps(err)}")
     sys.exit(0)
 
@@ -824,6 +826,7 @@ def main():
     "compute_ratio": compute_ratio,
     "memory_transfer_ratio": memory_transfer_ratio,
     "metadata": {
+      **request_metadata,
       "reference_latency_ms": ref_latency,
       "reference_perf_ok": ref_perf.get("ok", False),
       "profile_diagnostics": profile_diag,

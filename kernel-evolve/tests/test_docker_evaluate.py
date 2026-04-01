@@ -149,6 +149,43 @@ def test_setup_dump_env_uses_variant_id():
     assert evaluate._get_dump_dir() == "/tmp/ir_dumps/v1-tiling"
 
 
+def test_batch_dispatch_forwards_metadata(tmp_path):
+    """batch_dispatch includes variant metadata in single-variant payloads."""
+    # Create a mock evaluator script that echoes the decoded payload's metadata
+    script = tmp_path / "echo_eval.py"
+    script.write_text('''\
+import sys, json, base64
+payload = json.loads(base64.b64decode(sys.argv[2]).decode())
+meta = payload.get("metadata", {})
+result = {"status": "SUCCESS", "variant_id": payload["variant_id"],
+          "fitness": 1.0, "latency_ms": 1.0, "speedup": 1.0,
+          "metadata": {"forwarded_meta": meta}}
+print(f"EVAL_RESULT:{json.dumps(result)}")
+''')
+
+    payload = {
+        "reference_code": "ref",
+        "shapes": [{"M": 1024}],
+        "variants": [
+            {
+                "variant_id": "L1_v1_t0",
+                "kernel_code": "code",
+                "metadata": {
+                    "tuning_config": {"BLOCK_K": 64},
+                    "code_variant_id": "L1_v1",
+                },
+            },
+        ],
+    }
+    from kernel_evolve.docker_evaluate_helpers import batch_dispatch
+    results = batch_dispatch(payload, str(script), per_variant_timeout=10)
+    assert len(results) == 1
+    result_data = json.loads(results[0].split("EVAL_RESULT:", 1)[1])
+    forwarded = result_data["metadata"]["forwarded_meta"]
+    assert forwarded["tuning_config"] == {"BLOCK_K": 64}
+    assert forwarded["code_variant_id"] == "L1_v1"
+
+
 def test_batch_dispatch_handles_timeout():
   """batch_dispatch should handle subprocess timeout gracefully."""
   from kernel_evolve.docker_evaluate_helpers import batch_dispatch
