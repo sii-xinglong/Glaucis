@@ -1,14 +1,14 @@
 {
   "status": "SUCCESS",
   "variant_id": "baseline",
-  "fitness": 4.277065519432887,
-  "latency_ms": 0.05393517399999837,
-  "speedup": 4.277065519432887,
+  "fitness": 1.1546186670646474,
+  "latency_ms": 0.054294117000012194,
+  "speedup": 1.1546186670646474,
   "flops": 0.0,
   "compute_ratio": 1.0,
   "memory_transfer_ratio": 0.0,
   "metadata": {
-    "reference_latency_ms": 0.2306842730000062,
+    "reference_latency_ms": 0.0626890010000061,
     "reference_perf_ok": true,
     "profile_diagnostics": {
       "process_names": {
@@ -26,8 +26,8 @@
         ],
         "701": [
           "/host:CPU",
-          "main/588",
-          "futex-default-SDomainT/1257",
+          "main/583",
+          "futex-default-SDomainT/1259",
           "python",
           "jit_optimized_compute"
         ]
@@ -38,67 +38,84 @@
       "computation_events": 70
     },
     "hw_utilization": {
-      "mxu_util_pct": 22.661506699974105,
-      "vector_alu_util_pct": 14.924745901309825,
-      "scalar_alu_util_pct": 0.002495714461687822,
-      "vector_load_util_pct": 0.0008372250231077539,
-      "vector_store_util_pct": 7.623563930338422,
-      "vector_eup_util_pct": 0.37769176768709867,
+      "mxu_util_pct": 22.680456833884403,
+      "vector_alu_util_pct": 14.93889858278546,
+      "scalar_alu_util_pct": 0.0022134489110167813,
+      "vector_load_util_pct": 0.0007447692041922685,
+      "vector_store_util_pct": 7.6161530977985405,
+      "vector_eup_util_pct": 0.3780076032438068,
       "vector_fills": 21440,
       "vector_spills": 20420
     },
     "profile": {
       "ok": true,
-      "vliw_bundle_count": 4,
-      "mxu_utilization": null,
+      "vliw_bundle_count": 8270,
+      "mxu_utilization": {
+        "mxu0": 4656,
+        "mxu1": 0,
+        "total": 4656,
+        "dual_ratio": 0.0,
+        "distribution": {
+          "mxu0_pct": 100.0,
+          "mxu1_pct": 0.0
+        }
+      },
       "hbm_bandwidth_bytes": null,
       "flops": null,
       "arithmetic_intensity": null,
       "vmem_allocation": null,
       "vmem_utilization_pct": null,
       "bundle_density": null,
-      "dma_analysis": null,
+      "dma_analysis": {
+        "dma_count": 24,
+        "dma_sync_count": 0,
+        "double_buffering": false
+      },
       "fusion_analysis": {
         "fusion_count": 0,
         "has_cross_program_prefetch": false
       },
-      "special_units": null,
+      "special_units": {
+        "xlane_ops": 32,
+        "eup_ops": 0,
+        "nop_count": 0
+      },
       "hbm_capacity_utilization_pct": 0.00203549861907959
     },
     "benchmark": {
-      "lower_time_ms": 59.48219100002916,
-      "compile_time_ms": 9148.384769000018,
+      "lower_time_ms": 49.46081000025515,
+      "compile_time_ms": 9087.239087999933,
       "evaluation_times_ms": [
-        0.053836509999993724,
-        0.05448739500000374,
-        0.05393517399999837,
-        0.05442249399999855,
-        0.05389315699999861
+        0.054294117000012194,
+        0.05444065100001171,
+        0.05395325600000797,
+        0.054624248999985865,
+        0.05399534799999674
       ],
       "peak_memory_mb": 4.001953125,
-      "median_ms": 0.05393517399999837,
-      "min_ms": 0.053836509999993724,
-      "max_ms": 0.05448739500000374,
-      "stddev_ms": 0.00028012103402372084,
-      "cv": 0.005193661450387261,
+      "median_ms": 0.054294117000012194,
+      "min_ms": 0.05395325600000797,
+      "max_ms": 0.054624248999985865,
+      "stddev_ms": 0.0002571369418011965,
+      "cv": 0.004736000067947301,
       "timing_source": "xprof_clustered"
     },
     "reference_benchmark": {
-      "lower_time_ms": 2699.668054999961,
-      "compile_time_ms": 18226.087577000042,
+      "lower_time_ms": 98.06921500012322,
+      "compile_time_ms": 6161.934111000392,
       "evaluation_times_ms": [
-        0.23005162100000598,
-        0.2308761249999952,
-        0.2306842730000062,
-        0.23085496700000657,
-        0.23016439000000538
+        0.06242601999999897,
+        0.06292917200000375,
+        0.0626890010000061,
+        0.06294372799999837,
+        0.062130701999994924
       ],
-      "peak_memory_mb": 18.853515625,
-      "median_ms": 0.2306842730000062,
-      "min_ms": 0.23005162100000598,
-      "max_ms": 0.2308761249999952,
-      "stddev_ms": 0.0003497582005620923,
-      "cv": 0.0015161770501887785,
+      "peak_memory_mb": 7.00146484375,
+      "median_ms": 0.0626890010000061,
+      "min_ms": 0.062130701999994924,
+      "max_ms": 0.06294372799999837,
+      "stddev_ms": 0.00031052204158631174,
+      "cv": 0.004953373584407279,
       "timing_source": "xprof_clustered"
     }
   }

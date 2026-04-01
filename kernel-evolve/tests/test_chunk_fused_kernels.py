@@ -67,8 +67,12 @@ def test_config_loads():
     assert len(config.shapes) >= 1
 
 
+@pytest.mark.skipif(
+    not __import__("jax").default_backend().upper().startswith("TPU"),
+    reason="Pallas TPU kernels require TPU backend",
+)
 def test_reference_forward_small():
-    """Reference kernel produces output on CPU (small dims)."""
+    """Reference kernel produces output on TPU (small dims)."""
     ref_ns = {}
     exec((EXAMPLES / "kernels/chunk_fused_kernels_ref.py").read_text(), ref_ns)
 
@@ -76,7 +80,7 @@ def test_reference_forward_small():
 
     q, k, v, g_gamma = ref_ns["_make_test_data"](1, 64, 2, 128, 128, 64)
     scale = 128 ** -0.5
-    o = ref_ns["chunk_fused_ref"](
+    o = ref_ns["chunk_gla_ref"](
         q.astype(jnp.float32), k.astype(jnp.float32),
         v.astype(jnp.float32), g_gamma, scale, 64,
     )
