@@ -707,29 +707,27 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
         alloc_count += 1
 
       # v7x MLIR LLO format: parse memref types from function signature
-      # e.g. memref<1x1x128x128xf32, ..., #tpu.memory_space<vmem>>
+      # e.g. memref<1x1x128x128xf32, #tpu.tiled<...>, #tpu.memory_space<vmem>>
+      # Match each memref with its shape, dtype, and memory space.
       if alloc_count == 0:
-        vmem_memrefs = re.findall(
-          r"memref<([\dx]+)x(\w+),\s*[^>]+memory_space<vmem>",
-          llo_text,
+        # Find all memref declarations with their memory space
+        memref_re = re.compile(
+          r"memref<([\dx]+)x(\w+),"  # shape x dtype
+          r"(?:(?!memref<).)*?"       # anything except another memref<
+          r"memory_space<(\w+)>",     # memory space
+          re.DOTALL,
         )
-        smem_memrefs = re.findall(
-          r"memref<([\dx]+)x(\w+),\s*[^>]+memory_space<smem>",
-          llo_text,
-        )
-        for shape_str, dtype in vmem_memrefs:
+        for mm in memref_re.finditer(llo_text):
+          shape_str, dtype, space = mm.group(1), mm.group(2), mm.group(3)
           elems = 1
           for d in shape_str.split("x"):
             if d:
               elems *= int(d)
-          vmem_b += elems * _DTYPE_BYTES.get(dtype, 4)
-          alloc_count += 1
-        for shape_str, dtype in smem_memrefs:
-          elems = 1
-          for d in shape_str.split("x"):
-            if d:
-              elems *= int(d)
-          smem_b += elems * _DTYPE_BYTES.get(dtype, 4)
+          byte_sz = elems * _DTYPE_BYTES.get(dtype, 4)
+          if space == "smem":
+            smem_b += byte_sz
+          else:
+            vmem_b += byte_sz
           alloc_count += 1
 
       if alloc_count > 0:
