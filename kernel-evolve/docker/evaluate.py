@@ -757,6 +757,12 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       flops / hbm_bytes if flops and hbm_bytes else None
     )
 
+    # VMEM utilization: vmem_bytes vs 64 MiB physical capacity (TPU v7x)
+    vmem_utilization_pct = None
+    if vmem_allocation is not None and vmem_allocation["vmem_bytes"] > 0:
+      vmem_capacity_bytes = 64 * 1024 * 1024  # 64 MiB per chip
+      vmem_utilization_pct = vmem_allocation["vmem_bytes"] / vmem_capacity_bytes * 100.0
+
     return {
       "ok": True,
       "vliw_bundle_count": vliw_bundle_count,
@@ -765,6 +771,7 @@ def stage_profile_deep(exec_globals, shapes, dump_dir=None):
       "flops": flops,
       "arithmetic_intensity": arithmetic_intensity,
       "vmem_allocation": vmem_allocation,
+      "vmem_utilization_pct": vmem_utilization_pct,
       "bundle_density": bundle_density,
       "dma_analysis": dma_analysis,
       "fusion_analysis": fusion_analysis,
@@ -901,6 +908,12 @@ def main():
   if deep_profile.get("hbm_bandwidth_bytes") and bench_result["latency_ms"] > 0:
     actual_bw = deep_profile["hbm_bandwidth_bytes"] / (bench_result["latency_ms"] / 1000.0)
     deep_profile["hbm_bandwidth_utilization_pct"] = (actual_bw / peak_hbm_bw) * 100.0
+
+  # HBM capacity utilization (TPU v7x: 192 GB per chip)
+  peak_memory_mb = bench_result.get("benchmark", {}).get("peak_memory_mb")
+  if peak_memory_mb is not None and peak_memory_mb > 0:
+    hbm_capacity_mb = 192 * 1024  # 192 GB in MB
+    deep_profile["hbm_capacity_utilization_pct"] = peak_memory_mb / hbm_capacity_mb * 100.0
 
   # ── Upload profile artifacts to GCS (non-fatal) ──
   artifacts = {}

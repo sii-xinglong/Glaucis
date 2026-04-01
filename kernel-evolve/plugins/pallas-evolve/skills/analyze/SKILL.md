@@ -50,7 +50,9 @@ Each `eval_result.json` has this structure:
       "flops": 1.07e9,
       "compute_efficiency_pct": 45.2,
       "hbm_bandwidth_utilization_pct": 2.1,
+      "hbm_capacity_utilization_pct": 0.8,
       "vmem_allocation": {"vmem_bytes": 1572864, "smem_bytes": 1024, "allocation_count": 8},
+      "vmem_utilization_pct": 2.3,
       "bundle_density": {"total_bundles": 4302, "avg_ops_per_bundle": 3.2, "max_ops_per_bundle": 7},
       "dma_analysis": {"dma_count": 42, "dma_sync_count": 20, "double_buffering": true},
       "fusion_analysis": {"fusion_count": 0, "has_cross_program_prefetch": false},
@@ -94,7 +96,9 @@ For each variant, classify status and analyze performance:
   - `arithmetic_intensity`: FLOPs per byte of HBM traffic. Higher = more compute per byte.
   - `compute_efficiency_pct`: actual FLOPS / peak FLOPS as percentage.
   - `hbm_bandwidth_utilization_pct`: actual HBM bandwidth / peak bandwidth as percentage. >80% = near bandwidth ceiling.
+  - `hbm_capacity_utilization_pct`: peak HBM memory allocated as percentage of 192 GB capacity. High values indicate large buffer allocations in HBM.
   - `vmem_allocation.vmem_bytes`: total on-chip VMEM allocated. High values indicate VMEM pressure.
+  - `vmem_utilization_pct`: VMEM bytes allocated as percentage of 64 MiB physical capacity. Higher = better utilization of on-chip memory (up to ~90%). >90% = near OOM risk. <30% = underutilized, room to increase block sizes or add scratch memory.
   - `bundle_density.avg_ops_per_bundle`: average operations per VLIW bundle. Higher = better ILP. <2.0 = poor slot utilization.
   - `bundle_density.max_ops_per_bundle`: peak ILP achieved. TPU v7x can do up to 8 ops/bundle.
   - `dma_analysis.dma_count`: total DMA transfer operations. High count may indicate excessive data movement.
@@ -129,6 +133,9 @@ For each variant, classify status and analyze performance:
   | `fusion_count > 3` | — | Too many fusions: excessive HBM round-trips between fusions |
   | `nop_count > 50` | — | Pipeline bubbles: compiler couldn't fill VLIW slots with useful work |
   | `hbm_bandwidth_utilization_pct > 80` | — | Near HBM bandwidth ceiling: memory-bound, reduce data movement |
+  | `vmem_utilization_pct < 30` | — | VMEM underutilized: on-chip memory has headroom, increase block sizes or add scratch memory to improve data reuse |
+  | `vmem_utilization_pct > 90` | — | VMEM near capacity: close to OOM, do not increase block sizes or add scratch buffers without reducing elsewhere |
+  | `hbm_capacity_utilization_pct > 50` | — | High HBM allocation: large buffers in HBM, check for redundant allocations or unnecessary intermediate tensors |
   | `vector_spills > 0` | — | Register spills: compiler ran out of registers, spilling to VMEM. Reduces throughput. |
   | `vector_fills > 0` | — | Register fills: data reloaded from VMEM due to prior spills. Adds latency. |
   | `mxu_util_pct < 15` (compute kernel) | — | MXU underutilized at runtime: matmul not dominating execution time |
@@ -145,6 +152,9 @@ For each variant, classify status and analyze performance:
   - **High scalar_alu + low mxu_util** -> Control-flow or index arithmetic dominating. Simplify indexing, reduce conditionals, use `pl.program_id()` instead of computed indices.
   - **Multiple units > 20% util but none > 50%** -> Units executing in sequence rather than overlapping. Restructure to interleave MXU, Vector, and DMA operations. Check VLIW bundle density for co-scheduling opportunities.
   - **High vector_load + high vector_store + low mxu** -> Data shuffling dominates. Reduce VMEM traffic via better tiling or in-register accumulation.
+  - **Low vmem_utilization + memory-bound (compute_ratio < 0.5)** -> VMEM has capacity headroom but kernel is memory-bound. Increase block sizes or add scratch memory to cache intermediate results on-chip, reducing HBM round-trips.
+  - **High vmem_utilization (>90%) + vector_spills > 0** -> VMEM is nearly full AND registers are spilling. Must reduce block dimensions or remove intermediate arrays to free both VMEM and register space.
+  - **High hbm_capacity_utilization + low arithmetic_intensity** -> Large HBM allocations with low compute per byte. Data is allocated in HBM but not effectively reused. Increase tile sizes to amortize HBM reads, or eliminate redundant intermediate buffers.
 
 - Determine a mutation `direction` label for this variant (e.g., `tiling_strategy`, `block_size`, `k_tiling`, `pipelining`, `mxu_scheduling`, `scratch_memory`, etc.) from the variant's strategy.md or directory name.
 
@@ -290,6 +300,8 @@ If this is Round 2+, track per-lineage metrics across rounds. Read previous roun
 | `mxu_util_pct` | Increasing | Decreasing (MXU becoming idle) |
 | `vector_spills` | Decreasing toward 0 | Increasing (growing register pressure) |
 | `scalar_alu_util_pct` | Decreasing (less overhead) | Increasing (more control flow) |
+| `vmem_utilization_pct` | Increasing (better on-chip memory use) | Decreasing while memory-bound (wasting VMEM headroom) |
+| `peak_memory_mb` | Stable or decreasing | Increasing (HBM consumption bloat) |
 
 Flag per-lineage:
 - **Regressions**: speedup decreased from previous round for this lineage
@@ -299,6 +311,8 @@ Flag per-lineage:
 - **"MXU regression"**: dual_ratio dropped after a code change -- the change broke MXU scheduling
 - **"Register spill introduced"**: vector_spills went from 0 to >0 -- the new kernel variant has register pressure, likely from larger blocks or more intermediates
 - **"Overlap degradation"**: hardware units went from concurrent to sequential utilization -- restructure VLIW scheduling
+- **"VMEM utilization regression"**: vmem_utilization_pct dropped while kernel is still memory-bound -- the new variant reduced on-chip data reuse, wasting VMEM headroom
+- **"HBM consumption bloat"**: peak_memory_mb increased significantly -- the new variant allocates more HBM buffers, check for unnecessary intermediates
 
 ### Step 8: Write outputs
 
@@ -338,7 +352,9 @@ Write two output files:
 | compute_efficiency | {compute_efficiency_pct}% | {vs peak FLOPS} |
 | HBM bandwidth | {hbm_bandwidth_bytes} bytes | {comparison to optimal} |
 | HBM BW utilization | {hbm_bandwidth_utilization_pct}% | {near ceiling / headroom} |
+| HBM capacity used | {hbm_capacity_utilization_pct}% of 192 GB ({peak_memory_mb} MB) | {low/medium/high(>50)} |
 | VMEM allocated | {vmem_allocation.vmem_bytes} bytes | {pressure level} |
+| VMEM utilization | {vmem_utilization_pct}% of 64 MiB | {low(<30)/medium(30-70)/good(70-90)/critical(>90)} |
 | Bundle density (avg) | {avg_ops_per_bundle} ops/bundle | {poor/fair/good} |
 | DMA transfers | {dma_count} ({double_buffering ? "double-buffered" : "single-buffered"}) | {assessment} |
 | Pipeline NOPs | {nop_count} | {low/concerning/high} |
@@ -441,6 +457,24 @@ When generating suggestions for each variant, use these categories based on the 
 - Replace intermediate arrays with in-place updates or recomputation
 - Minimize the number of `Ref` slices held across `fori_loop` iterations
 - If both fills and spills are high, the kernel fundamentally exceeds register capacity — restructure the algorithm
+
+**VMEM underutilized (vmem_utilization_pct < 30%):**
+- Increase block dimensions (e.g., BM=64→128→256) to process more data per tile on-chip
+- Add scratch memory (`pltpu.SemaphoreType.REGULAR`) for VMEM accumulators to avoid HBM write-back
+- Cache frequently accessed weight tiles in VMEM across loop iterations
+- Use double buffering to prefetch next tile into spare VMEM while computing current tile
+
+**VMEM near capacity (vmem_utilization_pct > 90%):**
+- Do NOT increase block sizes or add scratch buffers without reducing elsewhere
+- Reduce block dimensions if register spills are also present
+- Remove unnecessary intermediate arrays or recompute values instead of caching
+- Consider splitting the kernel into smaller stages to reduce peak VMEM usage
+
+**High HBM allocation (hbm_capacity_utilization_pct > 50%):**
+- Check for redundant intermediate tensors that could be computed in-place
+- Reduce materialized buffer sizes via smaller batch or sequence dimensions
+- Verify no unnecessary copies or transposes are allocating extra HBM buffers (check HLO for `copy`/`transpose` ops outside fused region)
+- Use in-place updates (`Ref` slicing) instead of allocating new output buffers
 
 **Poor hardware unit overlap (units executing sequentially, max-min util gap > 30%):**
 - Interleave MXU matmul with Vector ALU reductions in the same loop body so both units stay busy
