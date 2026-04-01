@@ -1,6 +1,6 @@
 ---
 name: start
-description: Use when starting a Pallas kernel optimization session on TPU v7x — runs baseline profiling, reads config, creates tracking Issue, runs profile-informed think-submit-analyze-reflect-compact loop with lineage tracking
+description: Use when starting a Pallas kernel optimization session on TPU v7x — reads config, verifies baseline, creates tracking Issue, runs profile-informed think-submit-analyze-reflect-compact loop with lineage tracking
 ---
 
 # Pallas Kernel Batch Optimization
@@ -76,7 +76,7 @@ For each round from 1 to `max_iterations`:
 Before generating variants, generate a profile brief from the previous round's best variant for sub-agents.
 
 1. **Identify the profile source**:
-   - Round 1: Use `{run_dir}/baseline/` (copied from `examples/kernels/{kernel_name}_baseline/` during Step 9). The baseline `profile_brief.md` already exists — read it directly and skip to step 4.
+   - Round 1: Use `{run_dir}/baseline/` (copied from `examples/kernels/{kernel_name}_baseline/` during Step 9). The baseline `profile_brief.md` already exists — read it directly and skip to step 3.
    - Round 2+: Read `lineages.json`, find the lineage with the highest `best_speedup`, use its `best_kernel` directory (the directory containing the kernel file, which should also contain `eval_result.json`, `llo_final.txt`, etc.)
 
 2. **Generate profile brief (Round 2+ only)**: Invoke `pallas-evolve:profile-brief` via the Skill tool:
@@ -87,7 +87,7 @@ Before generating variants, generate a profile brief from the previous round's b
 
    This generates `profile_brief.md` in the profile source directory with a delta-vs-baseline table.
 
-3. **Copy profile brief to iteration directory**: Copy the generated `profile_brief.md` to `{run_dir}/iteration_{N}/profile_brief.md` for archival.
+3. **Copy profile brief to iteration directory**: Copy `profile_brief.md` to `{run_dir}/iteration_{N}/profile_brief.md` for archival. For Round 1, copy from `{run_dir}/baseline/profile_brief.md`. For Round 2+, copy from the profile source directory (where `profile-brief` skill wrote it in step 2).
 
 4. **Read the profile brief into a variable** for passing to sub-agents in Phase 1.
 
