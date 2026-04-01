@@ -622,19 +622,64 @@ print('EVOLVE-BLOCK content OK')
 "
 ```
 
-### 9d. TPU verification (optional)
+### 9d. Baseline profiling (Round 0)
 
-Check if kubectl is available and connected:
+Verify the template kernel compiles and runs on TPU, collect baseline performance metrics and profiling artifacts.
 
-```bash
-kubectl cluster-info 2>/dev/null
-```
+1. **Verify kubectl connectivity**:
 
-If connected, use AskUserQuestion with header "TPU verify" and options:
-- "Submit baseline evaluation" — submit a Round 0 evaluation via pallas-evolve:submit to verify correctness on real TPU hardware
-- "Skip" — defer to first round of pallas-evolve:start
+   ```bash
+   kubectl cluster-info
+   ```
 
-If the user chooses to submit, use the pallas-evolve:submit skill with the template and ref files.
+   If not connected, **stop with error**: "TPU connectivity required for baseline profiling. Connect to the GKE cluster (`gcloud container clusters get-credentials tpu7x-cluster --zone us-central1`) and re-run."
+
+2. **Create baseline directory**:
+
+   ```bash
+   mkdir -p kernel-evolve/examples/kernels/${KERNEL_NAME}_baseline/
+   cp kernel-evolve/examples/kernels/${KERNEL_NAME}.py \
+      kernel-evolve/examples/kernels/${KERNEL_NAME}_baseline/kernel.py
+   ```
+
+3. **Set up temporary iteration structure for submit**: The `pallas-evolve:submit` skill expects an iteration directory with `variants/*/kernel.py`. Create a temporary structure:
+
+   ```bash
+   BASELINE_TMPDIR=$(mktemp -d)
+   mkdir -p "${BASELINE_TMPDIR}/iteration_0/variants/baseline/"
+   cp kernel-evolve/examples/kernels/${KERNEL_NAME}.py \
+      "${BASELINE_TMPDIR}/iteration_0/variants/baseline/kernel.py"
+   ```
+
+4. **Submit baseline for TPU evaluation**: Invoke `pallas-evolve:submit` via the Skill tool, pointing at the temporary iteration directory. This will:
+   - Submit the baseline kernel as a single-variant batch
+   - Collect `eval_result.json` with performance metrics and deep profiling data
+   - Download `llo_final.txt`, `hlo_post_opt.txt`, `trace_events.json` from GCS
+
+5. **Copy results to permanent baseline directory**:
+
+   ```bash
+   cp "${BASELINE_TMPDIR}/iteration_0/variants/baseline/"* \
+      kernel-evolve/examples/kernels/${KERNEL_NAME}_baseline/
+   rm -rf "${BASELINE_TMPDIR}"
+   ```
+
+6. **Check for compilation failure**: Read `kernel-evolve/examples/kernels/${KERNEL_NAME}_baseline/eval_result.json`. If `status` is `COMPILE_ERROR`, **stop and report the error** — the template kernel itself is broken and must be fixed before optimization can begin.
+
+7. **Generate baseline profile brief**: Invoke `pallas-evolve:profile-brief` via the Skill tool:
+
+   ```
+   /pallas-evolve:profile-brief kernel-evolve/examples/kernels/${KERNEL_NAME}_baseline/ --round 0
+   ```
+
+   This writes `profile_brief.md` into the baseline directory.
+
+8. **Commit baseline artifacts**:
+
+   ```bash
+   git add kernel-evolve/examples/kernels/${KERNEL_NAME}_baseline/
+   git commit -m "perf(${KERNEL_NAME}): baseline profiling — Round 0 artifacts"
+   ```
 
 ## Step 10 — Cleanup and summary
 
@@ -659,6 +704,7 @@ Generated files:
   kernel-evolve/examples/{KERNEL_NAME}.yaml              — config
   kernel-evolve/examples/kernels/{KERNEL_NAME}.py         — template (with EVOLVE-BLOCK)
   kernel-evolve/examples/kernels/{KERNEL_NAME}_ref.py     — reference (self-contained)
+  kernel-evolve/examples/kernels/{KERNEL_NAME}_baseline/  — baseline profiling artifacts
   kernel-evolve/upstream/{KERNEL_NAME}/                   — unmodified upstream source
   kernel-evolve/tests/test_{KERNEL_NAME}.py               — pytest convention tests
   kernel-evolve/tests/standalone_{KERNEL_NAME}_test.py    — TPU integration test
