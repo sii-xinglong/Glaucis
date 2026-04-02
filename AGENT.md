@@ -413,6 +413,7 @@
 - **Root cause**: The explicit scratch store/load instructions add more VLIW overhead than the compiler's automatic spill management. The compiler's register allocator already produces reasonably efficient spill patterns for this kernel complexity. Adding explicit VMEM staging creates ADDITIONAL load/store instructions on top of the compiler's own spills, rather than replacing them.
 - **Fix**: Do NOT attempt to manually manage register pressure by adding VMEM scratch buffers for intermediate staging. The Mosaic compiler's register allocator is hard to beat with explicit staging at high kernel complexity (~9400 VLIW bundles). Prefer approaches that ELIMINATE intermediates (algebraic simplification, input elimination) rather than STAGE them.
 - **Extends**: FP29 (staged writes regress MXU util), R7 L2_reduce_intermediates (scoped recomputation counterproductive)
+- **Also confirmed**: fused_chunk_simple_gla session 3 round 2 — adding [BT,BT] VMEM scratch for attention matrix A in 4-step forward kernel added +224 VLIW bundles (+4.2%), +32 DMA ops (+6.9%), +32KB VMEM (+5.5%), with zero spill reduction (identical 6.3M spills) and zero speedup improvement. Pattern holds across different kernel architectures and complexities.
 - **First seen**: 2026-03-31, chunk_gla optimization round 8
 
 ### [FP34] Register pressure reduction saturates at high optimization levels — spill reduction ≠ speedup
@@ -629,6 +630,13 @@
 - **Fix**: Precision.HIGHEST is required for ALL matmuls whose output contributes to the summed scalar loss — which is ALL of them. Precision reduction is IMPOSSIBLE for this kernel at atol=10.0 with scalar loss correctness checking.
 - **Extends**: FP35 (accumulated matmuls fail), FP40 (gradient chain matmuls fail). This completes the picture: NO matmul in this kernel can use DEFAULT precision at atol=10.0.
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 8
+
+### [FP56] disable_bounds_checks=True is a no-op for kernels with aligned block sizes
+- **Symptom**: Adding `compiler_params=pltpu.TPUCompilerParams(disable_bounds_checks=True)` to forward and/or backward pallas_call produces identical compiled output (same VLIW=5275, same MXU=640/0, same spills=6,326,905, same LLO line count=10457). Zero speedup difference.
+- **Root cause**: When block sizes (BT=64, BK=128, BV=128) evenly divide all tensor dimensions (T=4096, K=128, V=128), the compiler already optimizes away bounds checks during compilation. There are no partial tiles that would require bounds checking, so `disable_bounds_checks` has nothing to disable.
+- **Fix**: Do not use `disable_bounds_checks=True` as an optimization lever when all block dimensions evenly divide the corresponding tensor dimensions. Only applicable when partial tiles exist (e.g., T not divisible by BT).
+- **Confirmed across**: L1_emit_pipeline (forward only), L2_disable_bounds_checks (all 3 kernels) — both identical to baseline. Tested on fused_chunk_simple_gla with shapes B=10/12, T=4096, H=16, K=128, V=128, chunk_size=64.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization session 3 round 2
 
 ### SO21: Python `for step in range(N)` compiles identically to manual unrolling in Pallas
 - **Optimization**: Replace N manually copy-pasted sub-step blocks in Pallas kernel body with `for step in range(N): body(step)` Python loop. Tested at 4-step and 8-step levels.
