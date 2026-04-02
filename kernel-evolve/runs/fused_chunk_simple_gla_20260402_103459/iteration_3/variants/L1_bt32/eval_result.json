@@ -1,0 +1,6 @@
+{
+  "status": "INCORRECT",
+  "variant_id": "L1_bt32",
+  "error": "Correctness failed for shape {'B': 10, 'T': 4096, 'H': 16, 'K': 128, 'V': 128, 'chunk_size': 64}: max_diff=24.21875",
+  "max_diff": 24.21875
+}
