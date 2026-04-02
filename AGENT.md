@@ -605,6 +605,30 @@
 - **Fix**: BT=128 is NOT safe at atol=10.0 for this kernel. Do not attempt without relaxing atol. BT=64 is the maximum safe chunk size.
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 7
 
+### [FP53] Backward architecture (split vs monolithic vs restructured) has zero performance impact
+- **Symptom**: Three backward architecture variants all achieve ~1.388x (identical to baseline):
+  - L1_bwd_monolithic (fused 2 passes → 1): 1.3875x
+  - L1_bwd_dv_to_pass2 (moved dv to parallel pass): 1.3874x
+  - L1_bf16_dh_states (bf16 intermediate): 1.3876x
+- **Root cause**: The backward computes 9 matmuls per time step × 64 time steps. This total compute is INVARIANT to how it's organized (split into passes, fused into monolithic, restructured). Eliminating the dh_states intermediate (~671MB HBM) also has zero impact because the kernel is compute-bound (compute_ratio=1.0). The compiler produces equivalent execution time regardless of backward kernel architecture.
+- **Fix**: Do NOT attempt to optimize backward by changing kernel architecture (splitting, fusing, or restructuring passes). The backward latency is determined solely by the total matmul count, not by how those matmuls are distributed across pallas_calls.
+- **Extends**: FP43 (backward unrolling negligible), FP45 (pallas_call reduction zero impact), FP51 (Phase 1 elimination zero impact). This is the definitive conclusion: backward performance is completely determined by per-iteration matmul compute.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 8
+
+### [FP54] BK=64 K-tiling violates Pallas TPU block shape constraint
+- **Symptom**: `ValueError: The Pallas TPU lowering currently requires that the last two dimensions of your block shape are divisible by 8 and 128 respectively, or be equal to the respective dimensions of the overall array.` Block shape (1,1,256,64) with array shape (10,16,4096,128) fails because last dim=64 is neither divisible by 128 nor equal to 128.
+- **Root cause**: Pallas TPU backend enforces that the last dimension of any block shape must be divisible by 128 OR equal to the array's last dimension. With K=128 and BK=64, the last dimension of q/k BlockSpec is 64, which fails both conditions. This is a HARDWARE constraint of the TPU MXU/memory system.
+- **Fix**: BK MUST be 128 when K=128 (must equal array dimension). K-tiling via grid-level NK>1 is IMPOSSIBLE unless K >= 256 (so BK=128 can be used with NK=K/128). This eliminates forward K-tiling as an optimization direction for K=128 shapes.
+- **Extends**: New constraint not covered by FP42 (which tested K-split within kernel body, not grid-level K-tiling).
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 8
+
+### [FP55] Precision.DEFAULT for non-accumulating intra-chunk matmuls exceeds atol in scalar loss
+- **Symptom**: Changing ONLY dot(partial_A, b_v) from Precision.HIGHEST to DEFAULT (4 occurrences in forward 4-step kernel) produces max_diff=23.95 >> atol=10.0. The h-update matmul was KEPT at HIGHEST.
+- **Root cause**: Although dot(A, v) is non-accumulating per-chunk, the output o is summed across ALL elements to produce the scalar loss. With B×T×H×V = 10×4096×16×128 = 83.8M elements, even small per-element precision differences (~0.003) compound to max_diff ≈ 24 in the scalar sum. The "non-accumulating" classification only applies to per-element or per-chunk correctness, NOT to the scalar loss which aggregates all elements.
+- **Fix**: Precision.HIGHEST is required for ALL matmuls whose output contributes to the summed scalar loss — which is ALL of them. Precision reduction is IMPOSSIBLE for this kernel at atol=10.0 with scalar loss correctness checking.
+- **Extends**: FP35 (accumulated matmuls fail), FP40 (gradient chain matmuls fail). This completes the picture: NO matmul in this kernel can use DEFAULT precision at atol=10.0.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 8
+
 ### SO21: Python `for step in range(N)` compiles identically to manual unrolling in Pallas
 - **Optimization**: Replace N manually copy-pasted sub-step blocks in Pallas kernel body with `for step in range(N): body(step)` Python loop. Tested at 4-step and 8-step levels.
 - **Impact**: L3_fwd_4step_pyloop achieves identical metrics to manual L3_fwd_4step: VLIW=5,275, MXU=640, fills=6,762,360, spills=6,326,905, latency=9.687ms. LLO line count identical (10,457). L3_fwd_8step_pyloop also matches manual L3_fwd_8step (VLIW=10,403, MXU=1,280). Both confirmed at sub-millisecond timing precision (stddev <0.001ms).
