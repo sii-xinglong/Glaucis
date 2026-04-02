@@ -309,7 +309,9 @@
 - **Symptom**: chunk_size=32 (BT=32) drops MXU runtime utilization to 12% (from 22.5% at BT=64). Near-zero register spills but doubled grid iterations. Speedup: 0.811x (worse than 0.885x baseline).
 - **Root cause**: With BT=32, matmul dimensions are [32,128]@[128,128]. The 32-wide dimension underutilizes the 128x128 MXU systolic array — only 1/4 of MXU rows are active per matmul. More grid iterations (128 vs 64 tiles) add launch overhead that exceeds the simpler-code benefit.
 - **Fix**: BT (chunk block tile) must be >= 64 for reasonable MXU utilization on TPU v7x. BT=32 is below the threshold for efficient MXU use.
+- **Extended (correctness)**: On fused_chunk_simple_gla, BT=32 fails correctness entirely: max_diff=24.22 (atol=10.0). Not just slow — produces wrong results. The causal masking and g_gamma decay accumulation depend on chunk_size=64 alignment.
 - **First seen**: 2026-03-30, chunk_gla optimization round 2
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 3 — BT=32 INCORRECT (max_diff=24.22)
 
 ### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
 - **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
@@ -413,6 +415,7 @@
 - **Root cause**: The explicit scratch store/load instructions add more VLIW overhead than the compiler's automatic spill management. The compiler's register allocator already produces reasonably efficient spill patterns for this kernel complexity. Adding explicit VMEM staging creates ADDITIONAL load/store instructions on top of the compiler's own spills, rather than replacing them.
 - **Fix**: Do NOT attempt to manually manage register pressure by adding VMEM scratch buffers for intermediate staging. The Mosaic compiler's register allocator is hard to beat with explicit staging at high kernel complexity (~9400 VLIW bundles). Prefer approaches that ELIMINATE intermediates (algebraic simplification, input elimination) rather than STAGE them.
 - **Extends**: FP29 (staged writes regress MXU util), R7 L2_reduce_intermediates (scoped recomputation counterproductive)
+- **Also confirmed**: fused_chunk_simple_gla session 3 round 2 — adding [BT,BT] VMEM scratch for attention matrix A in 4-step forward kernel added +224 VLIW bundles (+4.2%), +32 DMA ops (+6.9%), +32KB VMEM (+5.5%), with zero spill reduction (identical 6.3M spills) and zero speedup improvement. Pattern holds across different kernel architectures and complexities.
 - **First seen**: 2026-03-31, chunk_gla optimization round 8
 
 ### [FP34] Register pressure reduction saturates at high optimization levels — spill reduction ≠ speedup
@@ -478,6 +481,7 @@
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 1
 - **Extended**: 2026-04-01, round 5 — definitive convergence across 25+ variants and 5 rounds
 - **Extended**: 2026-04-02, fused_chunk_simple_gla round 2 — Sub-tiling attention matrix [64,64] into three [32,32] sub-tiles produces identical latency (13.44ms) and spills (310K) despite +77% VLIW bundles (1652→2920) and +73% MXU ops (160→276). Compiler reconstructs the full computation from sub-tiles. Extends FP42 (K-split normalization) to M/N-split normalization.
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 3 — Three completely different source-level changes (scratch_A removal, bf16 dh_states storage, backward 2-step grid reduction) ALL compiled to identical binary: VLIW=5275, MXU=640/0, spills=6,326,905, latency=9.692ms. Even backward architecture changes (monolithic L2 vs split L1) produce the same compiled forward kernel.
 
 ### [FP40] bf16+DEFAULT for non-accumulating matmuls still exceeds atol=1.0 in gradient chains
 - **Symptom**: Casting 4 non-accumulating matmul inputs to bf16 with `Precision.DEFAULT` (A recomputation, dA_raw, dv_intra, dA_T) produced max_diff=1.294677734375, exceeding atol=1.0. Two independent implementations (L1 and L2 lineages) produced identical max_diff, confirming it's systematic.
@@ -531,6 +535,7 @@
 - **Relationship**: Contrasts with SO14 (lax.scan→pallas_call) where launch overhead WAS the bottleneck. The difference: SO14's lax.scan had ~59ms PER-ITERATION dispatch overhead (host-device round-trip), while pallas_call grid iterations have negligible overhead when the kernel body itself is massive.
 - **First seen**: 2026-04-01, fused_chunk_simple_gla optimization round 1
 - **Extended**: 2026-04-02, fused_chunk_simple_gla session 2 round 1 — bwd_2pass_split (split backward into dv+dh and dq+dk passes for per-kernel register pressure reduction) also showed 1.000x. Splitting does NOT reduce aggregate spills (still 310K total across passes). CSE/intermediate reduction (reduce_bwd_intermediates) produced identical VLIW/MXU (FP39), and fwd_bwd_fusion (save h from fwd kernel) increased peak memory 50% without speedup. Grid unrolling (SO20 approach) crashed from implementation bugs — should be retried with correct indexing.
+- **Extended**: 2026-04-02, session 3 round 1 — At 1.388x baseline (4-step forward), 5 source-level variants confirmed zero improvement: eliminate_chunk_fwd_h (+25% peak memory, +23% VLIW, +28% DMA, zero speedup), bwd_monolithic (identical profile to bwd_kv_tiling despite different architecture), fwd_pyloop_clean (identical to manual unrolling), mixed_unroll_6 (+50% peak memory, worst of all). h output from fused forward adds significant HBM: 1280→1600 MB (f32 h) or 1280→1920 MB (combined h+loop). The VMEM/DMA overhead of writing h at sub-step boundaries exceeds the saved pallas_call.
 
 ### SO20: Grid unrolling on high-iteration-count kernels (1.388x on fused_chunk_simple_gla)
 - **Optimization**: N-step grid unrolling on forward kernel, reducing grid iterations by factor N. 2-step: 64→32 iterations. 4-step: 64→16 iterations. Extends SO18/SO19 to a much larger kernel (~13ms total execution vs 0.05ms).
@@ -556,6 +561,7 @@
 - **Compounding effect at >=4-step forward**: At 4-step forward, backward complexity becomes actively harmful (see SO20 update). L2 (2-step backward) achieves only 1.222x while L3 (no backward unrolling) achieves 1.388x with identical forward code.
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
 - **Extended**: 2026-04-02, fused_chunk_simple_gla round 4 — backward 4-step and backward 2-step both confirmed zero benefit
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 3 — L2_bwd_2step (2-step on monolithic backward) compiled identically to L1_no_scratch_A (split backward, no grid reduction). Backward grid unrolling is negligible regardless of backward architecture (split or monolithic).
 
 ### [FP46] BlockSpec block_shape dimensionality must exactly match out_shape for grid unrolling h_buf
 - **Symptom**: `ValueError: Block shape for outputs[4] (= (1, 1, 2, 128, 128)) must have the same number of dimensions as the array shape (10, 16, 32, 2, 128, 128)` — h_buf BlockSpec has 5 dimensions but out_shape creates a 6D array.
@@ -628,6 +634,13 @@
 - **Fix**: Precision.HIGHEST is required for ALL matmuls whose output contributes to the summed scalar loss — which is ALL of them. Precision reduction is IMPOSSIBLE for this kernel at atol=10.0 with scalar loss correctness checking.
 - **Extends**: FP35 (accumulated matmuls fail), FP40 (gradient chain matmuls fail). This completes the picture: NO matmul in this kernel can use DEFAULT precision at atol=10.0.
 - **First seen**: 2026-04-02, fused_chunk_simple_gla optimization round 8
+
+### [FP56] disable_bounds_checks=True is a no-op for kernels with aligned block sizes
+- **Symptom**: Adding `compiler_params=pltpu.TPUCompilerParams(disable_bounds_checks=True)` to forward and/or backward pallas_call produces identical compiled output (same VLIW=5275, same MXU=640/0, same spills=6,326,905, same LLO line count=10457). Zero speedup difference.
+- **Root cause**: When block sizes (BT=64, BK=128, BV=128) evenly divide all tensor dimensions (T=4096, K=128, V=128), the compiler already optimizes away bounds checks during compilation. There are no partial tiles that would require bounds checking, so `disable_bounds_checks` has nothing to disable.
+- **Fix**: Do not use `disable_bounds_checks=True` as an optimization lever when all block dimensions evenly divide the corresponding tensor dimensions. Only applicable when partial tiles exist (e.g., T not divisible by BT).
+- **Confirmed across**: L1_emit_pipeline (forward only), L2_disable_bounds_checks (all 3 kernels) — both identical to baseline. Tested on fused_chunk_simple_gla with shapes B=10/12, T=4096, H=16, K=128, V=128, chunk_size=64.
+- **First seen**: 2026-04-02, fused_chunk_simple_gla optimization session 3 round 2
 
 ### SO21: Python `for step in range(N)` compiles identically to manual unrolling in Pallas
 - **Optimization**: Replace N manually copy-pasted sub-step blocks in Pallas kernel body with `for step in range(N): body(step)` Python loop. Tested at 4-step and 8-step levels.

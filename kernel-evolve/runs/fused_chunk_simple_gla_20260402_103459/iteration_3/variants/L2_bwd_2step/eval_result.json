@@ -1,0 +1,133 @@
+{
+  "status": "SUCCESS",
+  "variant_id": "L2_bwd_2step",
+  "fitness": 1.3889482967639315,
+  "latency_ms": 9.692397208999989,
+  "speedup": 1.3889482967639315,
+  "flops": 0.0,
+  "compute_ratio": 1.0,
+  "memory_transfer_ratio": 0.0,
+  "metadata": {
+    "reference_latency_ms": 13.462238595000017,
+    "reference_perf_ok": true,
+    "profile_diagnostics": {
+      "process_names": {
+        "3": [
+          "/device:TPU:0",
+          "_counters_",
+          "XLA Modules",
+          "XLA Ops",
+          "Async XLA Ops",
+          "Tensor Core",
+          "Tensor Core Sync Flag",
+          "counters_0",
+          "Framework Name Scope",
+          "Framework Ops",
+          "Source code"
+        ],
+        "701": [
+          "/host:CPU",
+          "main/17295",
+          "futex-default-SDomainT/17970",
+          "python",
+          "jit_optimized_compute"
+        ]
+      },
+      "selected_pid": 3,
+      "total_events": 718404,
+      "tpu_events": 718250,
+      "computation_events": 85
+    },
+    "hw_utilization": {
+      "mxu_util_pct": 0.44248430654234616,
+      "vector_alu_util_pct": 0.2760335784445227,
+      "scalar_alu_util_pct": 1.2273821436766426,
+      "vector_load_util_pct": 0.19174182883544058,
+      "vector_store_util_pct": 0.11891751880534186,
+      "vector_eup_util_pct": 0.007605192353337081,
+      "vector_fills": 6762360,
+      "vector_spills": 6326905
+    },
+    "profile": {
+      "ok": true,
+      "vliw_bundle_count": 5275,
+      "mxu_utilization": {
+        "mxu0": 640,
+        "mxu1": 0,
+        "total": 640,
+        "dual_ratio": 0.0,
+        "distribution": {
+          "mxu0_pct": 100.0,
+          "mxu1_pct": 0.0
+        }
+      },
+      "hbm_bandwidth_bytes": 335544384,
+      "flops": null,
+      "arithmetic_intensity": null,
+      "vmem_allocation": {
+        "vmem_bytes": 589824,
+        "smem_bytes": 512,
+        "allocation_count": 6
+      },
+      "vmem_utilization_pct": 0.87890625,
+      "bundle_density": {
+        "total_bundles": 5275,
+        "avg_ops_per_bundle": 3.394312796208531,
+        "max_ops_per_bundle": 0
+      },
+      "dma_analysis": {
+        "dma_count": 464,
+        "dma_sync_count": 0,
+        "double_buffering": false
+      },
+      "fusion_analysis": {
+        "fusion_count": 0,
+        "has_cross_program_prefetch": false
+      },
+      "special_units": {
+        "xlane_ops": 128,
+        "eup_ops": 56,
+        "nop_count": 0
+      },
+      "hbm_bandwidth_utilization_pct": 0.9381934668746001,
+      "hbm_capacity_utilization_pct": 0.6510421633720398
+    },
+    "benchmark": {
+      "lower_time_ms": 75.0540919998457,
+      "compile_time_ms": 26677.975632001107,
+      "evaluation_times_ms": [
+        9.690816101999998,
+        9.692397208999989,
+        9.692546292999992,
+        9.692182172,
+        9.692932623
+      ],
+      "peak_memory_mb": 1280.0009765625,
+      "median_ms": 9.692397208999989,
+      "min_ms": 9.690816101999998,
+      "max_ms": 9.692932623,
+      "stddev_ms": 0.00072220261442391,
+      "cv": 7.451227997066611e-05,
+      "timing_source": "xprof_clustered"
+    },
+    "reference_benchmark": {
+      "lower_time_ms": 91.82127500025672,
+      "compile_time_ms": 26424.526619999597,
+      "evaluation_times_ms": [
+        13.555217287000007,
+        0.0005762309999990976,
+        13.451903961999996,
+        13.565749324999997,
+        13.462238595000017
+      ],
+      "peak_memory_mb": 1280.0009765625,
+      "median_ms": 13.462238595000017,
+      "min_ms": 0.0005762309999990976,
+      "max_ms": 13.565749324999997,
+      "stddev_ms": 5.403480353264702,
+      "cv": 0.4013805219045514,
+      "timing_source": "xprof_clustered"
+    },
+    "artifacts_gcs_prefix": "gs://glaucis-profiles/L2_bwd_2step"
+  }
+}

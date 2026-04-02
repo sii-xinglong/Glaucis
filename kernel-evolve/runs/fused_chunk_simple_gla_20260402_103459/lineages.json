@@ -1,0 +1,50 @@
+{
+  "round": 3,
+  "config": {
+    "top_k": 2,
+    "max_active_lineages": 4
+  },
+  "lineages": [
+    {
+      "id": "L1",
+      "parent": null,
+      "best_speedup": 1.4023,
+      "best_kernel": "iteration_3/variants/L1_no_scratch_A/kernel.py",
+      "direction": "cleanup",
+      "history": ["iter-1-bwd_kv_tiling", "iter-2-L1_scratch_A", "iter-3-L1_no_scratch_A"],
+      "stagnant_rounds": 1
+    },
+    {
+      "id": "L2",
+      "parent": null,
+      "best_speedup": 1.4023,
+      "best_kernel": "iteration_2/variants/L2_bwd_fused_arbitrary/kernel.py",
+      "direction": "bwd_fused_arbitrary",
+      "history": ["iter-1-bwd_monolithic", "iter-2-L2_bwd_fused_arbitrary", "iter-3-L2_bwd_2step"],
+      "stagnant_rounds": 1
+    }
+  ],
+  "pruned": [
+    {
+      "id": "P1",
+      "best_speedup": 1.3789,
+      "direction": "fwd_code_cleanup",
+      "pruned_at_round": 1,
+      "reason": "no_improvement_identical_compiled_output"
+    },
+    {
+      "id": "P2",
+      "best_speedup": 1.3789,
+      "direction": "fwd_h_elimination",
+      "pruned_at_round": 1,
+      "reason": "no_improvement_increased_complexity"
+    },
+    {
+      "id": "P3",
+      "best_speedup": 1.3789,
+      "direction": "combined_fwd_h_loop",
+      "pruned_at_round": 1,
+      "reason": "no_improvement_worst_memory"
+    }
+  ]
+}
