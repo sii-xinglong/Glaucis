@@ -309,7 +309,9 @@
 - **Symptom**: chunk_size=32 (BT=32) drops MXU runtime utilization to 12% (from 22.5% at BT=64). Near-zero register spills but doubled grid iterations. Speedup: 0.811x (worse than 0.885x baseline).
 - **Root cause**: With BT=32, matmul dimensions are [32,128]@[128,128]. The 32-wide dimension underutilizes the 128x128 MXU systolic array — only 1/4 of MXU rows are active per matmul. More grid iterations (128 vs 64 tiles) add launch overhead that exceeds the simpler-code benefit.
 - **Fix**: BT (chunk block tile) must be >= 64 for reasonable MXU utilization on TPU v7x. BT=32 is below the threshold for efficient MXU use.
+- **Extended (correctness)**: On fused_chunk_simple_gla, BT=32 fails correctness entirely: max_diff=24.22 (atol=10.0). Not just slow — produces wrong results. The causal masking and g_gamma decay accumulation depend on chunk_size=64 alignment.
 - **First seen**: 2026-03-30, chunk_gla optimization round 2
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 3 — BT=32 INCORRECT (max_diff=24.22)
 
 ### [FP11] tgmm TK=256 halves MXU ops — critical performance factor
 - **Symptom**: tgmm TK=256 (vs TK=512) drops speedup from 2.294x to 2.046x (-10.8%). VLIW bundles halve from 23,462 to 17,558, MXU ops halve from 1,792 to 896.
@@ -479,6 +481,7 @@
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 1
 - **Extended**: 2026-04-01, round 5 — definitive convergence across 25+ variants and 5 rounds
 - **Extended**: 2026-04-02, fused_chunk_simple_gla round 2 — Sub-tiling attention matrix [64,64] into three [32,32] sub-tiles produces identical latency (13.44ms) and spills (310K) despite +77% VLIW bundles (1652→2920) and +73% MXU ops (160→276). Compiler reconstructs the full computation from sub-tiles. Extends FP42 (K-split normalization) to M/N-split normalization.
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 3 — Three completely different source-level changes (scratch_A removal, bf16 dh_states storage, backward 2-step grid reduction) ALL compiled to identical binary: VLIW=5275, MXU=640/0, spills=6,326,905, latency=9.692ms. Even backward architecture changes (monolithic L2 vs split L1) produce the same compiled forward kernel.
 
 ### [FP40] bf16+DEFAULT for non-accumulating matmuls still exceeds atol=1.0 in gradient chains
 - **Symptom**: Casting 4 non-accumulating matmul inputs to bf16 with `Precision.DEFAULT` (A recomputation, dA_raw, dv_intra, dA_T) produced max_diff=1.294677734375, exceeding atol=1.0. Two independent implementations (L1 and L2 lineages) produced identical max_diff, confirming it's systematic.
@@ -558,6 +561,7 @@
 - **Compounding effect at >=4-step forward**: At 4-step forward, backward complexity becomes actively harmful (see SO20 update). L2 (2-step backward) achieves only 1.222x while L3 (no backward unrolling) achieves 1.388x with identical forward code.
 - **First seen**: 2026-04-01, chunk_fused_kernels optimization round 4
 - **Extended**: 2026-04-02, fused_chunk_simple_gla round 4 — backward 4-step and backward 2-step both confirmed zero benefit
+- **Extended**: 2026-04-02, fused_chunk_simple_gla round 3 — L2_bwd_2step (2-step on monolithic backward) compiled identically to L1_no_scratch_A (split backward, no grid reduction). Backward grid unrolling is negligible regardless of backward architecture (split or monolithic).
 
 ### [FP46] BlockSpec block_shape dimensionality must exactly match out_shape for grid unrolling h_buf
 - **Symptom**: `ValueError: Block shape for outputs[4] (= (1, 1, 2, 128, 128)) must have the same number of dimensions as the array shape (10, 16, 32, 2, 128, 128)` — h_buf BlockSpec has 5 dimensions but out_shape creates a 6D array.
