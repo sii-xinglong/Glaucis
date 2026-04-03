@@ -939,6 +939,8 @@ def main():
   parser.add_argument("--eval-payload", required=False)
   parser.add_argument("--eval-payload-file", required=False,
                       help="Path to file containing base64 payload")
+  parser.add_argument("--profile-dir", required=False,
+                      help="Directory to persist profiling artifacts (e.g. GCS FUSE mount)")
   args = parser.parse_args()
   if args.eval_payload_file:
     with open(args.eval_payload_file) as f:
@@ -1046,6 +1048,37 @@ def main():
   if gcs_result["ok"]:
     print(f"Uploaded artifacts: {gcs_result['uploaded']} to {gcs_result['gcs_prefix']}", file=sys.stderr)
 
+  # ── Persist profiling artifacts to --profile-dir (e.g. GCS FUSE mount) ──
+  profile_dir = args.profile_dir if hasattr(args, "profile_dir") else None
+  if profile_dir:
+    import shutil
+    pdir = Path(profile_dir)
+    pdir.mkdir(parents=True, exist_ok=True)
+    for name, local_path in artifacts.items():
+      if os.path.exists(local_path):
+        try:
+          shutil.copy2(local_path, pdir / name)
+          print(f"Persisted {name} -> {pdir / name}", file=sys.stderr)
+        except Exception as e:
+          print(f"Failed to persist {name}: {e}", file=sys.stderr)
+    # Also persist xplane.pb files directly for offline analysis
+    xplane_dir = Path("/tmp/xplane_trace/kernel")
+    if xplane_dir.exists():
+      xplane_out = pdir / "xplane"
+      xplane_out.mkdir(parents=True, exist_ok=True)
+      for root, _dirs, files in os.walk(xplane_dir):
+        for f in files:
+          if f.endswith(".xplane.pb"):
+            try:
+              shutil.copy2(os.path.join(root, f), xplane_out / f)
+              print(f"Persisted xplane: {f}", file=sys.stderr)
+            except Exception as e:
+              print(f"Failed to persist xplane {f}: {e}", file=sys.stderr)
+    # Persist eval_result.json for easy access
+    _profile_result_path = pdir / "eval_result.json"
+  else:
+    _profile_result_path = None
+
   # Strip internal fields from deep_profile before including in result
   clean_deep_profile = {k: v for k, v in deep_profile.items() if not k.startswith("_")}
 
@@ -1071,6 +1104,14 @@ def main():
   }
   print(f"EVAL_RESULT:{json.dumps(result)}")
 
+  # Write eval_result.json to profile dir if configured
+  if _profile_result_path:
+    try:
+      _profile_result_path.write_text(json.dumps(result, indent=2))
+      print(f"Persisted eval_result.json -> {_profile_result_path}", file=sys.stderr)
+    except Exception as e:
+      print(f"Failed to persist eval_result.json: {e}", file=sys.stderr)
+
 
 if __name__ == "__main__":
   # Parse payload to check for batch mode BEFORE setting up dump env.
@@ -1079,6 +1120,8 @@ if __name__ == "__main__":
   _parser.add_argument("--eval-payload", required=False)
   _parser.add_argument("--eval-payload-file", required=False,
                         help="Path to file containing base64 payload")
+  _parser.add_argument("--profile-dir", required=False,
+                        help="Directory to persist profiling artifacts (e.g. GCS FUSE mount)")
   _args = _parser.parse_args()
   if _args.eval_payload_file:
     with open(_args.eval_payload_file) as f:

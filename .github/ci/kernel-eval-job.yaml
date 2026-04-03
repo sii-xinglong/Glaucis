@@ -19,6 +19,8 @@ spec:
       labels:
         app: kernel-eval
         job-name: ${JOB_NAME}
+      annotations:
+        gke-gcsfuse/volumes: "true"
     spec:
       serviceAccountName: kernel-eval
       containers:
@@ -39,12 +41,16 @@ spec:
            cd /workspace && git checkout "$BRANCH")
           cd /workspace
           uv pip install --system -e kernel-evolve/
-          python kernel-evolve/docker/evaluate.py --eval-payload-file /etc/eval-payload/payload
+          python kernel-evolve/docker/evaluate.py \
+            --eval-payload-file /etc/eval-payload/payload \
+            --profile-dir /profiles/${JOB_NAME}
         env:
         - name: BRANCH
           value: "${BRANCH}"
         - name: REPO
           value: "${REPO}"
+        - name: JOB_NAME
+          value: "${JOB_NAME}"
         - name: JAX_PLATFORMS
           value: "tpu,cpu"
         - name: ENABLE_PJRT_COMPATIBILITY
@@ -64,13 +70,21 @@ spec:
         - name: eval-payload
           mountPath: /etc/eval-payload
           readOnly: true
+        - name: gcs-profiles
+          mountPath: /profiles
       volumes:
       - name: dshm
+        emptyDir:
+          medium: Memory
+      - name: gke-gcsfuse-cache
         emptyDir:
           medium: Memory
       - name: eval-payload
         configMap:
           name: ${JOB_NAME}-payload
+      - name: gcs-profiles
+        persistentVolumeClaim:
+          claimName: glaucis-profiles-pvc
       nodeSelector:
         cloud.google.com/gke-tpu-accelerator: tpu7x
         cloud.google.com/gke-tpu-topology: 2x2x1
